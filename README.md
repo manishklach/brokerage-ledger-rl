@@ -184,3 +184,9 @@ stock, SFT, and GRPO scorecards by evidence status before scaling up.
 ```bash
 python -u train_pilot.py --task hard-lot --sft-steps 32 --rl-steps 24 --eval-count 48 --output artifacts/hard-lot-pilot
 ```
+
+The existing supervised adapter scored 140/196 exact on the harder private
+holdout (58/64 supported, 80/130 missing evidence, and 2/2 ambiguous). It
+incorrectly marked 43 missing-evidence cases as supported. The ambiguity
+sample is too small for a general performance claim. Run the GGUF evaluator
+with --sft-only to reproduce the supervised-only comparison.

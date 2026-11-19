@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--sft", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--sft-only", action="store_true", help="Skip the stock checkpoint")
     args = parser.parse_args()
 
     import llama_cpp as cpp
@@ -74,7 +75,8 @@ def main():
                 if completed % 4 == 0 or completed == len(cases):
                     print(f"{stage}: {completed}/{len(cases)}", flush=True)
 
-        record("stock")
+        if not args.sft_only:
+            record("stock")
         adapter = cpp.llama_adapter_lora_init(model._model.model, str(args.sft).encode())
         if not adapter:
             raise RuntimeError("Could not load the supervised GGUF adapter")
