@@ -31,3 +31,18 @@ Only independently verified or synthetic labels should be used as reward
 targets. Realized P&L, strategy attribution, rolls, and wash-sale lot matching
 require additional implementation and source evidence. Keep raw and derived
 brokerage data local. The private/ and artifacts/ folders are ignored by Git.
+
+## Synthetic GPU pilot
+
+On a CUDA-enabled Linux PyTorch environment, install the pinned dependencies and
+run the pilot. This script generates its own inputs from synthetic data.
+
+```bash
+python -m pip install -r requirements-pilot.txt
+python -u train_pilot.py --output artifacts/pilot
+```
+
+The same held-out synthetic cases score the stock, SFT, and GRPO models.
+The scorecard and each adapter are saved in the output directory. This pilot
+tests spread-leg identification and cash arithmetic. It uses a single
+synthetic case family, so its scores cannot establish real-account accuracy.
