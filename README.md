@@ -61,3 +61,16 @@ CSV row order for ties in effective dates. Broker lot elections and pre-export
 positions can change the result. Compare against Schwab's realized gain/loss
 detail before using matches as evaluation labels. Assignment, exercise,
 expiration, splits, and cancellations require separate review.
+
+## Reconcile against Schwab exports
+
+```powershell
+python reconcile.py "<transactions CSV>" "<realized gain/loss CSV>" "<holdings CSV>" --month 2026-10 --as-of 2026-11-19 --output private/schwab-reconciliation.json
+```
+
+The realized comparison groups option contracts by effective close date and
+checks quantity, opening-date allocation, and reported gain/loss. Group ties
+do not establish individual lot identity when several fills share a date.
+The holdings comparison checks signed option quantities across the entire
+export window, starting from zero. It requires aligned account scope,
+snapshot date, and opening inventory for a full reconciliation.
