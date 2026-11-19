@@ -1,0 +1,47 @@
+import unittest
+from datetime import date
+from decimal import Decimal
+
+from ledger import Transaction
+from option_lots import match_options
+
+
+class OptionLotTests(unittest.TestCase):
+    def row(self, line, day, action, qty, amount):
+        return Transaction(line, day, day, action, "DEMO 11/20/2026 100 C", "",
+                           Decimal(qty), None, None, Decimal(amount))
+
+    def test_prior_close_consumes_inventory_and_partial_cost_ties(self):
+        sept = date(2026, 9, 1)
+        oct_ = date(2026, 10, 1)
+        rows = [
+            self.row(2, oct_, "Sell to Close", 3, "45.00"),
+            self.row(3, sept, "Sell to Close", 1, "15.00"),
+            self.row(4, sept, "Buy to Open", 1, "-8.99"),
+            self.row(5, sept, "Buy to Open", 3, "-30.01"),
+        ]
+        result, = match_options(rows, "2026-10")["closes"]
+        self.assertEqual(result["provisional_pnl"], "16.00")
+        self.assertEqual([m["open_line"] for m in result["matches"]], [5, 4])
+        self.assertEqual([m["open_cash"] for m in result["matches"]], ["-20.01", "-8.99"])
+
+    def test_cancellation_blocks_estimate(self):
+        day = date(2026, 10, 1)
+        rows = [
+            self.row(2, day, "Sell to Close", 1, "15"),
+            self.row(3, day, "Cancel Buy to Open", 1, "10"),
+            self.row(4, day, "Buy to Open", 1, "-10"),
+        ]
+        result, = match_options(rows, "2026-10")["closes"]
+        self.assertIsNone(result["provisional_pnl"])
+        self.assertEqual(result["blocking_lines"], [3])
+
+    def test_partial_coverage_has_no_whole_close_pnl(self):
+        day = date(2026, 10, 1)
+        rows = [
+            self.row(2, day, "Buy to Close", 2, "-20"),
+            self.row(3, day, "Sell to Open", 1, "15"),
+        ]
+        result, = match_options(rows, "2026-10")["closes"]
+        self.assertEqual(result["unmatched_quantity"], "1")
+        self.assertIsNone(result["provisional_pnl"])

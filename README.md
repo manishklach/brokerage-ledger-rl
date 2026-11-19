@@ -46,3 +46,18 @@ The same held-out synthetic cases score the stock, SFT, and GRPO models.
 The scorecard and each adapter are saved in the output directory. This pilot
 tests spread-leg identification and cash arithmetic. It uses a single
 synthetic case family, so its scores cannot establish real-account accuracy.
+
+## Provisional option lot matching
+
+```powershell
+python option_lots.py "<path to expanded Schwab CSV>" --month 2026-10 --output private/october-option-lots.json
+```
+
+Provide one continuous export per account. Every fully covered close includes
+the opening source rows, matched quantities, allocated cash and provisional
+realized P&L. Earlier closes consume inventory before the report month.
+The estimate assumes FIFO starting with zero known inventory and uses reverse
+CSV row order for ties in effective dates. Broker lot elections and pre-export
+positions can change the result. Compare against Schwab's realized gain/loss
+detail before using matches as evaluation labels. Assignment, exercise,
+expiration, splits, and cancellations require separate review.
