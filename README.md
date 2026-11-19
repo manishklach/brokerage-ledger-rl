@@ -208,3 +208,19 @@ GRPO eliminated false claims of support in this synthetic test and lost all
 exact supported answers. The older private-holdout score used a different
 case distribution. Testing either new adapter on the private holdout would
 be required to measure transfer.
+
+### Enforce evidence in the ledger
+
+Replay saved model replies against the deterministic evidence gate:
+
+```powershell
+python ledger_evidence.py private/hard-lot-holdout.json private/hard-lot-sft-scorecard.json --output private/hard-lot-ledger-replay.json
+```
+
+The gate returns exact required and recorded quantities, shortfalls, and
+matching transaction rows by date. The supervised model scored 140/196
+while the gate reproduced 196/196 holdout labels and reduced false claims
+of support from 43 to zero in this replay. The holdout labels use the same
+evidence rule, making this a consistency check rather than independent
+validation of remaining inventory, realized P&L, or natural-language
+interpretation. The replay uses previously saved model replies.

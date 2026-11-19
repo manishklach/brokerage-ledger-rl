@@ -40,6 +40,11 @@ def build(rows, realized, months, excluded_contracts):
             yield {
                 "id": f"close-{min(trade_lines)}", "month": month, "contract": symbol,
                 "question": evidence_prompt(requirements, evidence, action),
+                "evidence_input": {
+                    "action": action,
+                    "required_by_date": {day: str(qty) for day, qty in requirements.items()},
+                    "rows": [{**row, "quantity": str(row["quantity"])} for row in evidence],
+                },
                 "expected_status": status, "expected_lines": lines,
                 "broker_lines": group["broker_lines"], "close_lines": trade_lines,
                 "partial_open_row": status == "supported" and any(
