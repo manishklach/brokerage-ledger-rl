@@ -224,3 +224,27 @@ of support from 43 to zero in this replay. The holdout labels use the same
 evidence rule, making this a consistency check rather than independent
 validation of remaining inventory, realized P&L, or natural-language
 interpretation. The replay uses previously saved model replies.
+
+### Natural-language ledger routing
+
+The routing benchmark generates 30 questions from the private harder holdout.
+Each prompt supplies a candidate list of closes and asks the model to route
+to an evidence check, ask for clarification, or report no match. A close ID
+must refer to a listed candidate. The ledger retrieves the recorded claim
+and computes evidence status and source rows from structured inputs.
+
+```powershell
+python query_benchmark.py private/hard-lot-holdout.json --output private/query-benchmark.json
+python evaluate_gguf.py private/query-benchmark.json --model artifacts/qwen3-8b-base/qwen3-8b-q4_0.gguf --tokenizer artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft/adapter.gguf --query-cases --output private/query-model-scorecard.json
+```
+
+The benchmark scores schema-valid output, operation, and close ID
+separately. Candidate retrieval and unrestricted natural-language
+questions are outside this benchmark.
+
+On the first local 30-question run, stock Qwen routed 17/30 correctly and
+the supervised adapter routed 18/30. On the 18 questions with a unique
+match, the ledger returned the expected evidence for all 17 correct stock
+routes and all 18 supervised routes. Both models attempted an evidence
+check for all eight ambiguous and four no-match questions. All replies
+matched the JSON schema. Private prompts and replies are Git-ignored.

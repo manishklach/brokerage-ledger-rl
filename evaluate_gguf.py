@@ -8,9 +8,10 @@ from contextlib import closing
 from pathlib import Path
 
 from lot_pilot_data import score_lot
+from query_benchmark import query_score
 
 
-def evaluate(model, tokenizer, cases):
+def evaluate(model, tokenizer, cases, *, query_cases=False):
     replies = []
     correct_by_status = Counter()
     total_by_status = Counter()
@@ -25,10 +26,15 @@ def evaluate(model, tokenizer, cases):
             stop=["<|im_end|>", "<|endoftext|>"],
         )["choices"][0]["text"]
         status = case["expected_status"]
-        score = int(score_lot(reply, case["expected_lines"], status))
+        if query_cases:
+            checks = query_score(reply, case)
+            score = int(checks["exact"])
+        else:
+            checks = {}
+            score = int(score_lot(reply, case["expected_lines"], status))
         correct_by_status[status] += score
         total_by_status[status] += 1
-        replies.append({"id": case["id"], "reply": reply, "score": score})
+        replies.append({"id": case["id"], "reply": reply, "score": score, **checks})
         yield {
             "correct": sum(correct_by_status.values()),
             "total": len(cases), "completed": len(replies),
@@ -49,6 +55,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--sft-only", action="store_true", help="Skip the stock checkpoint")
+    parser.add_argument("--query-cases", action="store_true")
     args = parser.parse_args()
 
     import llama_cpp as cpp
@@ -66,7 +73,7 @@ def main():
         n_threads_batch=args.threads, n_gpu_layers=0, verbose=False,
     )) as model:
         def record(stage):
-            for result in evaluate(model, tokenizer, cases):
+            for result in evaluate(model, tokenizer, cases, query_cases=args.query_cases):
                 results[stage] = result
                 temporary = args.output.with_suffix(".tmp")
                 temporary.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
