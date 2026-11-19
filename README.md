@@ -74,3 +74,18 @@ do not establish individual lot identity when several fills share a date.
 The holdings comparison checks signed option quantities across the entire
 export window, starting from zero. It requires aligned account scope,
 snapshot date, and opening inventory for a full reconciliation.
+
+## Local held-out lot evaluation
+
+```powershell
+python lot_eval.py "<transactions CSV>" private/schwab-reconciliation.json --month 2026-10 --output private/october-lot-eval.json
+```
+
+The report includes broker-checked single-close, single-lot cases. Keep all
+inputs and labels under private/. The cases were selected from FIFO ties
+and measure performance on that subset. The separate diagnostic compares
+FIFO and LIFO against all broker groups the reconciliation joined.
+
+Use --predictions with a local JSON object keyed by case ID. Each prediction
+has a quantity_by_open_date object keyed by ISO dates and a pnl decimal
+string. Evaluation scores allocation, P&L, and their joint exact match.

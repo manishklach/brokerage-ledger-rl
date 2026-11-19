@@ -28,7 +28,7 @@ def allocate(amount: Decimal, quantity: Decimal, before: Decimal, after: Decimal
     return through(after) - through(before)
 
 
-def match_options(rows: list[Transaction], month: str) -> dict:
+def match_options(rows: list[Transaction], month: str, *, newest_first: bool = False) -> dict:
     contracts = defaultdict(list)
     for row in rows:
         if len(row.symbol.split()) == 4 and row.symbol.split()[-1] in {"C", "P"}:
@@ -73,7 +73,7 @@ def match_options(rows: list[Transaction], month: str) -> dict:
                 queue = lots["buy" if side == "sell" else "sell"]
                 pnl = Decimal("0.00")
                 while remaining and queue:
-                    lot = queue[0]
+                    lot = queue[-1] if newest_first else queue[0]
                     opening = lot.row
                     opened = abs(opening.quantity)
                     matched = min(remaining, opened - lot.used)
@@ -92,9 +92,12 @@ def match_options(rows: list[Transaction], month: str) -> dict:
                     remaining -= matched
                     lot.used += matched
                     if lot.used == opened:
-                        queue.popleft()
+                        if newest_first:
+                            queue.pop()
+                        else:
+                            queue.popleft()
                 result["unmatched_quantity"] = str(remaining)
-                result["status"] = "insufficient_open_quantity" if remaining else "provisional_fifo"
+                result["status"] = "insufficient_open_quantity" if remaining else ("provisional_lifo" if newest_first else "provisional_fifo")
                 if not remaining:
                     result["provisional_pnl"] = str(pnl)
             if in_month:
@@ -105,7 +108,7 @@ def match_options(rows: list[Transaction], month: str) -> dict:
         "month": month,
         "assumptions": [
             "One account, export starts with zero known inventory",
-            "FIFO by effective date; reverse CSV row order breaks ties",
+            ("LIFO" if newest_first else "FIFO") + " by effective date; reverse CSV row order breaks ties",
             "Earlier closes consume lots, including previously reported months",
             "Cash uses the reported Amount and includes no second fee deduction",
             "Contract events such as splits, cancellations, assignment and exercise require review",
