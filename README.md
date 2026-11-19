@@ -179,10 +179,13 @@ recorded rows. Prior consumption and broker lot elections need a separate
 inventory and accounting check.
 
 The matching GPU curriculum generates synthetic cases on demand. Compare the
-stock, SFT, and GRPO scorecards by evidence status before scaling up.
+stock, previous SFT (optional), new SFT, and GRPO scorecards by evidence status.
+The hard-lot GRPO reward gives +1 for exact status and rows, -0.5 for claiming
+support when evidence is missing, and 0 for other errors. The evaluation metric
+remains exact match for every checkpoint.
 
 ```bash
-python -u train_pilot.py --task hard-lot --sft-steps 32 --rl-steps 24 --eval-count 48 --output artifacts/hard-lot-pilot
+python -u train_pilot.py --task hard-lot --train-count 240 --sft-steps 64 --rl-steps 36 --eval-count 60 --output artifacts/hard-lot-pilot
 ```
 
 The existing supervised adapter scored 140/196 exact on the harder private
@@ -190,3 +193,18 @@ holdout (58/64 supported, 80/130 missing evidence, and 2/2 ambiguous). It
 incorrectly marked 43 missing-evidence cases as supported. The ambiguity
 sample is too small for a general performance claim. Run the GGUF evaluator
 with --sft-only to reproduce the supervised-only comparison.
+
+The first hard-lot GPU pilot used a balanced, 60-case synthetic holdout
+with 20 cases per evidence status:
+
+| Checkpoint | Supported | Missing evidence | Ambiguous | Total | Missing labeled supported |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Stock | 0/20 | 3/20 | 18/20 | 21/60 | 1 |
+| Previous SFT | 1/20 | 4/20 | 14/20 | 19/60 | 3 |
+| New SFT | 3/20 | 7/20 | 16/20 | 26/60 | 6 |
+| New SFT + GRPO | 0/20 | 7/20 | 18/20 | 25/60 | 0 |
+
+GRPO eliminated false claims of support in this synthetic test and lost all
+exact supported answers. The older private-holdout score used a different
+case distribution. Testing either new adapter on the private holdout would
+be required to measure transfer.

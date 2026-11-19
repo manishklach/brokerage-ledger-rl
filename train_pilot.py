@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from lot_pilot_data import hard_lot_cases, lot_cases, score_lot
+from lot_pilot_data import hard_lot_cases, hard_lot_reward, lot_cases, score_lot
 from pilot_data import cases
 from rewards import score_spread
 
@@ -40,6 +40,8 @@ def main():
     parser.add_argument("--sft-steps", type=int, default=12)
     parser.add_argument("--rl-steps", type=int, default=8)
     parser.add_argument("--eval-count", type=int, default=16)
+    parser.add_argument("--train-count", type=int, default=128)
+    parser.add_argument("--prior-sft", type=Path, help="Also score an existing adapter before training")
     parser.add_argument("--task", choices=["spread", "lot", "hard-lot"], default="spread")
     args = parser.parse_args()
     examples, scorer = {
@@ -50,7 +52,7 @@ def main():
 
     import torch
     from datasets import Dataset
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, set_seed
     from trl import GRPOConfig, GRPOTrainer, SFTConfig, SFTTrainer
 
@@ -76,7 +78,7 @@ def main():
             rows.append({"prompt": prompt, "completion": example.pop("answer") + tokenizer.eos_token, **example})
         return rows
 
-    train = dataset("train", 128)
+    train = dataset("train", args.train_count)
     held_out = dataset("eval", args.eval_count)
     scorecard = {}
 
@@ -87,6 +89,12 @@ def main():
         (args.output / "scores.json").write_text(json.dumps(scorecard, indent=2))
 
     record("stock")
+    if args.prior_sft:
+        prior = PeftModel.from_pretrained(model, args.prior_sft)
+        model = prior
+        record("prior-sft")
+        model = prior.unload()
+        del prior
     model = get_peft_model(prepare_model_for_kbit_training(model), LoraConfig(
         r=16, lora_alpha=32, target_modules="all-linear", task_type="CAUSAL_LM",
     ))
@@ -105,9 +113,11 @@ def main():
     del sft
     record("sft")
 
+    reward = hard_lot_reward if args.task == "hard-lot" else scorer
+
     def task_reward(completions, expected_lines, expected_cash, **kwargs):
         return [
-            scorer(answer, lines, cash)
+            reward(answer, lines, cash)
             for answer, lines, cash in zip(completions, expected_lines, expected_cash, strict=True)
         ]
 

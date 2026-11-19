@@ -127,3 +127,14 @@ def hard_lot_cases(split, count):
             "expected_lines": lines, "expected_cash": status,
             "answer": json.dumps({"status": status, "source_lines": lines}),
         }
+
+
+def hard_lot_reward(reply, expected_lines, expected_status):
+    exact = score_lot(reply, expected_lines, expected_status)
+    if exact or expected_status != "missing_evidence":
+        return exact
+    try:
+        answer = json.loads(reply, object_pairs_hook=unique_fields)
+    except ValueError:
+        return 0.0
+    return -0.5 if isinstance(answer, dict) and answer.get("status") == "supported" else 0.0
