@@ -89,3 +89,21 @@ FIFO and LIFO against all broker groups the reconciliation joined.
 Use --predictions with a local JSON object keyed by case ID. Each prediction
 has a quantity_by_open_date object keyed by ISO dates and a pnl decimal
 string. Evaluation scores allocation, P&L, and their joint exact match.
+
+## Lot-evidence post-training
+
+```bash
+python -u train_pilot.py --task lot --sft-steps 32 --rl-steps 24 --eval-count 48 --output artifacts/lot-pilot
+```
+
+The synthetic task supplies the requested opening date, action, and quantity.
+The model either returns the supporting row IDs or flags insufficient evidence.
+The reward checks both the status and the exact row IDs. Replies are saved for
+all three checkpoints so over-abstention can be detected.
+
+Build the private October prompts with private_lot_cases.py using the original
+transactions and reconciliation. Run evaluate_private_model.py with a local
+Qwen3-8B checkpoint and the SFT and RL adapter folders. The runner uses local
+checkpoint files and reports exact matches separately for supported and missing
+cases. This task checks documented opening evidence. P&L and remaining
+inventory are scored separately by the lot reconciliation workflow.

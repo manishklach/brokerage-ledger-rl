@@ -4,16 +4,18 @@ import argparse
 import json
 from pathlib import Path
 
+from lot_pilot_data import lot_cases, score_lot
 from pilot_data import cases
 from rewards import score_spread
 
 
-def evaluate(model, tokenizer, examples):
+def evaluate(model, tokenizer, examples, scorer):
     import torch
     from torch.utils.data import DataLoader
 
     model.eval()
     scores = []
+    details = []
     for batch in DataLoader(examples, batch_size=4, collate_fn=list):
         inputs = tokenizer(
             [row["prompt"] for row in batch], return_tensors="pt", padding=True,
@@ -25,11 +27,11 @@ def evaluate(model, tokenizer, examples):
                 top_k=None, top_p=None, pad_token_id=tokenizer.pad_token_id,
             )
         replies = tokenizer.batch_decode(output[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)
-        scores.extend(
-            score_spread(reply, row["expected_lines"], row["expected_cash"])
-            for reply, row in zip(replies, batch, strict=True)
-        )
-    return {"correct": int(sum(scores)), "total": len(scores)}
+        for reply, row in zip(replies, batch, strict=True):
+            score = scorer(reply, row["expected_lines"], row["expected_cash"])
+            scores.append(score)
+            details.append({"reply": reply, "target": row["expected_cash"], "score": score})
+    return {"correct": int(sum(scores)), "total": len(scores)}, details
 
 
 def main():
@@ -38,7 +40,9 @@ def main():
     parser.add_argument("--sft-steps", type=int, default=12)
     parser.add_argument("--rl-steps", type=int, default=8)
     parser.add_argument("--eval-count", type=int, default=16)
+    parser.add_argument("--task", choices=["spread", "lot"], default="spread")
     args = parser.parse_args()
+    examples, scorer = (lot_cases, score_lot) if args.task == "lot" else (cases, score_spread)
 
     import torch
     from datasets import Dataset
@@ -59,7 +63,7 @@ def main():
 
     def dataset(split, count):
         rows = []
-        for example in cases(split, count):
+        for example in examples(split, count):
             question = example.pop("question")
             prompt = tokenizer.apply_chat_template(
                 [{"role": "user", "content": question}], tokenize=False,
@@ -73,7 +77,8 @@ def main():
     scorecard = {}
 
     def record(stage):
-        scorecard[stage] = evaluate(model, tokenizer, held_out)
+        scorecard[stage], details = evaluate(model, tokenizer, held_out, scorer)
+        (args.output / f"{stage}-replies.json").write_text(json.dumps(details, indent=2))
         print(json.dumps({stage: scorecard[stage]}), flush=True)
         (args.output / "scores.json").write_text(json.dumps(scorecard, indent=2))
 
@@ -96,14 +101,14 @@ def main():
     del sft
     record("sft")
 
-    def spread_reward(completions, expected_lines, expected_cash, **kwargs):
+    def task_reward(completions, expected_lines, expected_cash, **kwargs):
         return [
-            score_spread(answer, lines, cash)
+            scorer(answer, lines, cash)
             for answer, lines, cash in zip(completions, expected_lines, expected_cash, strict=True)
         ]
 
     rl = GRPOTrainer(
-        model=model, processing_class=tokenizer, reward_funcs=spread_reward,
+        model=model, processing_class=tokenizer, reward_funcs=task_reward,
         args=GRPOConfig(
             output_dir=str(args.output / "rl"), max_steps=args.rl_steps,
             per_device_train_batch_size=4, num_generations=4, max_completion_length=80,
