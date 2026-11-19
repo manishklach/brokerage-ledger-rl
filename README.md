@@ -136,3 +136,28 @@ Keep raw brokerage files, derived reports, private prompts, weights, and
 credentials out of Git. The repository ignores `private/`, `artifacts/`,
 CSV and JSONL exports, and adapter weights. Upload only the training code and
 synthetic cases to Runpod. Repository visibility is an additional control.
+
+### October holdout result
+
+Both checkpoints ran locally with the same Qwen3-8B Q4_0 GGUF base,
+llama.cpp runtime, prompt format, and greedy decoding. The supervised
+checkpoint used the converted LoRA adapter. Exact match required both the
+expected evidence status and the exact supporting source row IDs.
+
+| Checkpoint | Supported | Missing evidence | Total |
+| --- | ---: | ---: | ---: |
+| Stock Qwen3-8B | 0/21 | 32/32 | 32/53 |
+| Supervised LoRA | 21/21 | 32/32 | 53/53 |
+
+The result covers this selected October evidence benchmark. A new holdout
+should include other months, ambiguous lots, and partial quantities before
+using the score to justify a larger model. P&L accuracy and broker lot
+allocation require their own evaluations.
+
+To reproduce the CPU comparison, prepare a Qwen3-8B Q4_0 GGUF, its local
+Hugging Face tokenizer files, and a compatible LoRA GGUF converted from the
+SFT checkpoint. The run used llama-cpp-python 0.3.35.
+
+```powershell
+python evaluate_gguf.py private/october-evidence-cases.json --model artifacts/qwen3-8b-base/qwen3-8b-q4_0.gguf --tokenizer artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft/adapter.gguf --output private/october-gguf-scorecard.json
+```

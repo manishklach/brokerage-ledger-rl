@@ -7,3 +7,4 @@ artifacts/
 *.sqlite*
 *.safetensors
 .env
+*.gguf
