@@ -1,0 +1,33 @@
+# Brokerage Ledger RL
+
+Local-first Schwab transaction reconciliation and reward verification. The Runpod
+target is Qwen3.8-27B, with Qwen3-8B planned for the first supervised and
+verifiable-reward training run.
+
+## Run the local audit
+
+Python 3.11+, standard library only.
+
+```powershell
+python ledger.py "<path to Schwab CSV>" --output private/audit.json
+python -m unittest -v
+```
+
+The audit sums Schwab's reported Amount field with decimal arithmetic. Fees are
+retained on transactions and are never subtracted a second time by the cash
+report. Blank amounts remain missing and their source lines are reported. Net
+transaction cash is a cash-flow figure. Realized P&L requires matched opening
+lots and basis. The report uses posted dates for its date range and effective
+dates to propose spread candidates.
+
+A vertical candidate has opposite sides in the same open/close phase, same
+effective date, underlying, expiry, option right and absolute quantity, and
+different strikes. The code proposes only mutually unique pairs. A unique pair
+still requires independent confirmation because these fields do not establish
+order membership. Competing matches remain ambiguous.
+
+The initial reward requires exact confirmed source lines and exact net cash.
+Only independently verified or synthetic labels should be used as reward
+targets. Realized P&L, strategy attribution, rolls, and wash-sale lot matching
+require additional implementation and source evidence. Keep raw and derived
+brokerage data local. The private/ and artifacts/ folders are ignored by Git.

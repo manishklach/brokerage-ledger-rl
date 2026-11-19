@@ -1,0 +1,51 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from ledger import audit, read_export
+from rewards import score_spread
+
+CSV = """Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount
+10/03/2026 as of 10/02/2026,Sell to Open,DEMO 11/20/2026 100 P,,1,2.50,0.65,249.35
+10/02/2026,Buy to Open,DEMO 11/20/2026 95 P,,1,1.00,0.65,-100.65
+10/22/2026,Expired,DEMO 10/22/2026 90 P,,-1,,,
+"""
+
+
+class LedgerTests(unittest.TestCase):
+    def report(self, content):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.csv"
+            path.write_text(content, encoding="utf-8")
+            return audit(read_export(path))
+
+    def test_reconciliation_and_adjusted_date(self):
+        report = self.report(CSV)
+        self.assertEqual(report["net_transaction_cash"], "148.70")
+        self.assertEqual(report["missing_amount_source_lines"], [4])
+        self.assertEqual(report["adjusted_date_count"], 1)
+        self.assertEqual(report["vertical_spread_candidates"], [{
+            "effective_date": "2026-10-02",
+            "phase": "open",
+            "source_lines": [2, 3],
+            "net_cash": "148.70",
+        }])
+
+    def test_competing_leg_is_ambiguous(self):
+        row = "10/02/2026,Buy to Open,DEMO 11/20/2026 90 P,,1,0.50,0.65,-50.65\n"
+        report = self.report(CSV + row)
+        self.assertEqual(report["vertical_spread_candidates"], [])
+        self.assertEqual(report["ambiguous_spread_source_lines"], [2, 3, 5])
+
+    def test_reward_rejects_guesses_and_invalid_answers(self):
+        cases = {
+            '{"source_lines":[3,2],"net_cash":"148.70"}': 1.0,
+            '{"source_lines":[2,4],"net_cash":"148.70"}': 0.0,
+            '{"source_lines":[2,3],"net_cash":"148.71"}': 0.0,
+            '{"source_lines":[2,3],"net_cash":"NaN"}': 0.0,
+            '{"source_lines":[2,3],"net_cash":"148.70","net_cash":"148.70"}': 0.0,
+            'not JSON': 0.0,
+        }
+        for answer, expected in cases.items():
+            with self.subTest(answer=answer):
+                self.assertEqual(score_spread(answer, [2, 3], "148.70"), expected)
