@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from lot_pilot_data import lot_cases, score_lot
+from lot_pilot_data import hard_lot_cases, lot_cases, score_lot
 from pilot_data import cases
 from rewards import score_spread
 
@@ -40,9 +40,13 @@ def main():
     parser.add_argument("--sft-steps", type=int, default=12)
     parser.add_argument("--rl-steps", type=int, default=8)
     parser.add_argument("--eval-count", type=int, default=16)
-    parser.add_argument("--task", choices=["spread", "lot"], default="spread")
+    parser.add_argument("--task", choices=["spread", "lot", "hard-lot"], default="spread")
     args = parser.parse_args()
-    examples, scorer = (lot_cases, score_lot) if args.task == "lot" else (cases, score_spread)
+    examples, scorer = {
+        "spread": (cases, score_spread),
+        "lot": (lot_cases, score_lot),
+        "hard-lot": (hard_lot_cases, score_lot),
+    }[args.task]
 
     import torch
     from datasets import Dataset

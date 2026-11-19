@@ -161,3 +161,26 @@ SFT checkpoint. The run used llama-cpp-python 0.3.35.
 ```powershell
 python evaluate_gguf.py private/october-evidence-cases.json --model artifacts/qwen3-8b-base/qwen3-8b-q4_0.gguf --tokenizer artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft/adapter.gguf --output private/october-gguf-scorecard.json
 ```
+
+### Harder lot-evidence benchmark
+
+Build a fresh local holdout from months outside October. The builder excludes
+contract identities seen in the October reconciliation. Broker-reported dates
+and quantities form the claims to check against recorded opening rows.
+
+```powershell
+python hard_lot_holdout.py private/transactions.csv private/realized.csv --months 2026-07 2026-08 2026-09 2026-11 --output private/hard-lot-holdout.json
+```
+
+Cases distinguish supported evidence, missing quantities or dates, and
+ambiguous row allocations. A case can include multiple opening dates or an
+opening row larger than the matched quantity. The evidence rule checks the
+recorded rows. Prior consumption and broker lot elections need a separate
+inventory and accounting check.
+
+The matching GPU curriculum generates synthetic cases on demand. Compare the
+stock, SFT, and GRPO scorecards by evidence status before scaling up.
+
+```bash
+python -u train_pilot.py --task hard-lot --sft-steps 32 --rl-steps 24 --eval-count 48 --output artifacts/hard-lot-pilot
+```
