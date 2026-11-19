@@ -1,109 +1,138 @@
 # Brokerage Ledger RL
 
-Local-first Schwab transaction reconciliation and reward verification. The Runpod
-target is Qwen3.8-27B, with Qwen3-8B planned for the first supervised and
-verifiable-reward training run.
+A local-first research project for reconciling Schwab options activity and
+post-training an open-weight model with verifiable rewards. A deterministic
+ledger handles quantities and cash. The model learns to identify supporting
+transaction rows and flag missing evidence. The project analyzes past trades.
 
-## Run the local audit
+## What the project does
 
-Python 3.11+, standard library only.
+1. Normalize one account's Schwab transaction export, keeping source row
+   numbers, posted dates, effective dates, quantities, reported amounts, and
+   fees.
+2. Audit transaction cash and propose vertical spread pairings for review.
+3. Reconstruct provisional option lots, then compare opening-date allocations,
+   quantities, and realized P&L with Schwab's closed-lot detail. Compare signed
+   position quantities with a separate holdings snapshot.
+4. Post-train Qwen3-8B on synthetic cases using supervised fine-tuning (SFT) and
+   Group Relative Policy Optimization (GRPO). A Python verifier scores exact
+   source row IDs and, depending on the task, cash or evidence status.
+5. Evaluate checkpoints on the same held-out inputs. Synthetic evaluation can
+   run on a GPU Pod. Broker-derived prompts and labels stay local.
+
+## Inputs
+
+| Schwab export | Fields used | Purpose |
+| --- | --- | --- |
+| Transaction history | Date, Action, Symbol, Description, Quantity, Price, Fees & Comm, Amount | Source transactions and reported cash |
+| Realized Gain/Loss detail | Symbol, Closed Date, Opened Date, Quantity, Gain/Loss, wash-sale flag | Independent broker lot and P&L comparison |
+| Positions snapshot | Symbol, signed quantity, snapshot date supplied via CLI | Open options quantity comparison |
+
+Use one continuous transaction export per account and align the scope and
+dates of the other exports. If a newer export contains all rows in an earlier
+one, use the newer file on its own.
+
+## Run the local workflow
+
+Ledger and report commands use Python 3.11+ and the standard library. Put
+exports under the Git-ignored `private/` folder or use absolute paths to the
+original files. The example uses October 2026. Adjust the reporting month and
+snapshot date to match your inputs.
 
 ```powershell
-python ledger.py "<path to Schwab CSV>" --output private/audit.json
+python ledger.py private/transactions.csv --output private/audit.json
+python option_lots.py private/transactions.csv --month 2026-10 --output private/october-option-lots.json
+python reconcile.py private/transactions.csv private/realized.csv private/holdings.csv --month 2026-10 --as-of 2026-11-19 --output private/schwab-reconciliation.json
+python lot_eval.py private/transactions.csv private/schwab-reconciliation.json --month 2026-10 --output private/october-lot-eval.json
+python private_lot_cases.py private/transactions.csv private/schwab-reconciliation.json --month 2026-10 --output private/october-evidence-cases.json
 python -m unittest -v
 ```
 
-The audit sums Schwab's reported Amount field with decimal arithmetic. Fees are
-retained on transactions and are never subtracted a second time by the cash
-report. Blank amounts remain missing and their source lines are reported. Net
-transaction cash is a cash-flow figure. Realized P&L requires matched opening
-lots and basis. The report uses posted dates for its date range and effective
-dates to propose spread candidates.
+The cash audit sums Schwab's reported Amount using decimal arithmetic. Blank
+amounts remain missing and are flagged by source row. Fees are preserved and
+the audit avoids deducting fees a second time. Net transaction cash and
+realized P&L are separate measures.
 
-A vertical candidate has opposite sides in the same open/close phase, same
-effective date, underlying, expiry, option right and absolute quantity, and
-different strikes. The code proposes only mutually unique pairs. A unique pair
-still requires independent confirmation because these fields do not establish
-order membership. Competing matches remain ambiguous.
+The spread audit proposes mutually unique opposite-side pairs with the same
+effective date, open or close phase, underlying, option right, expiry, and
+absolute quantity, and different strikes. A unique pairing still needs
+trade-confirmation evidence to establish order membership.
 
-The initial reward requires exact confirmed source lines and exact net cash.
-Only independently verified or synthetic labels should be used as reward
-targets. Realized P&L, strategy attribution, rolls, and wash-sale lot matching
-require additional implementation and source evidence. Keep raw and derived
-brokerage data local. The private/ and artifacts/ folders are ignored by Git.
+The lot matcher consumes earlier closes, handles partial fills across lots,
+and allocates cash to cents. It uses FIFO with zero starting inventory and
+reverse CSV row order for same-day ties. The diagnostic also compares LIFO.
+Missing pre-export inventory, broker lot elections, same-day ordering, and
+contract events can affect the result. The matcher flags unsupported events.
+Comprehensive wash-sale matching, assignments, exercise accounting, strategy
+attribution, and roll reconstruction remain research work.
 
-## Synthetic GPU pilot
+## Post-train on synthetic data
 
-On a CUDA-enabled Linux PyTorch environment, install the pinned dependencies and
-run the pilot. This script generates its own inputs from synthetic data.
+Run these commands on a CUDA-enabled Linux PyTorch environment. The training
+script generates synthetic inputs itself. Qwen3-8B ran with 4-bit NF4 and LoRA
+on a single RTX 4090 Runpod Pod.
 
 ```bash
 python -m pip install -r requirements-pilot.txt
-python -u train_pilot.py --output artifacts/pilot
-```
-
-The same held-out synthetic cases score the stock, SFT, and GRPO models.
-The scorecard and each adapter are saved in the output directory. This pilot
-tests spread-leg identification and cash arithmetic. It uses a single
-synthetic case family, so its scores cannot establish real-account accuracy.
-
-## Provisional option lot matching
-
-```powershell
-python option_lots.py "<path to expanded Schwab CSV>" --month 2026-10 --output private/october-option-lots.json
-```
-
-Provide one continuous export per account. Every fully covered close includes
-the opening source rows, matched quantities, allocated cash and provisional
-realized P&L. Earlier closes consume inventory before the report month.
-The estimate assumes FIFO starting with zero known inventory and uses reverse
-CSV row order for ties in effective dates. Broker lot elections and pre-export
-positions can change the result. Compare against Schwab's realized gain/loss
-detail before using matches as evaluation labels. Assignment, exercise,
-expiration, splits, and cancellations require separate review.
-
-## Reconcile against Schwab exports
-
-```powershell
-python reconcile.py "<transactions CSV>" "<realized gain/loss CSV>" "<holdings CSV>" --month 2026-10 --as-of 2026-11-19 --output private/schwab-reconciliation.json
-```
-
-The realized comparison groups option contracts by effective close date and
-checks quantity, opening-date allocation, and reported gain/loss. Group ties
-do not establish individual lot identity when several fills share a date.
-The holdings comparison checks signed option quantities across the entire
-export window, starting from zero. It requires aligned account scope,
-snapshot date, and opening inventory for a full reconciliation.
-
-## Local held-out lot evaluation
-
-```powershell
-python lot_eval.py "<transactions CSV>" private/schwab-reconciliation.json --month 2026-10 --output private/october-lot-eval.json
-```
-
-The report includes broker-checked single-close, single-lot cases. Keep all
-inputs and labels under private/. The cases were selected from FIFO ties
-and measure performance on that subset. The separate diagnostic compares
-FIFO and LIFO against all broker groups the reconciliation joined.
-
-Use --predictions with a local JSON object keyed by case ID. Each prediction
-has a quantity_by_open_date object keyed by ISO dates and a pnl decimal
-string. Evaluation scores allocation, P&L, and their joint exact match.
-
-## Lot-evidence post-training
-
-```bash
+python -u train_pilot.py --task spread --output artifacts/spread-pilot
 python -u train_pilot.py --task lot --sft-steps 32 --rl-steps 24 --eval-count 48 --output artifacts/lot-pilot
 ```
 
-The synthetic task supplies the requested opening date, action, and quantity.
-The model either returns the supporting row IDs or flags insufficient evidence.
-The reward checks both the status and the exact row IDs. Replies are saved for
-all three checkpoints so over-abstention can be detected.
+- **Spread task:** Return the exact row IDs of both legs and their signed net
+  cash. The verifier checks both fields.
+- **Lot-evidence task:** Given a requested opening date, quantity, and action,
+  return the supporting row IDs or flag insufficient evidence. This checks
+  whether the recorded rows support the request. The ledger separately handles
+  remaining inventory and P&L.
 
-Build the private October prompts with private_lot_cases.py using the original
-transactions and reconciliation. Run evaluate_private_model.py with a local
-Qwen3-8B checkpoint and the SFT and RL adapter folders. The runner uses local
-checkpoint files and reports exact matches separately for supported and missing
-cases. This task checks documented opening evidence. P&L and remaining
-inventory are scored separately by the lot reconciliation workflow.
+Each run saves a stock, SFT, and GRPO scorecard, individual replies, and both
+LoRA adapters. These were the results on the synthetic lot-evidence pilot:
+
+| Checkpoint | Supported cases | Missing evidence | Total |
+| --- | ---: | ---: | ---: |
+| Stock Qwen3-8B | 0/24 | 19/24 | 19/48 |
+| Supervised fine-tuning | 20/24 | 17/24 | 37/48 |
+| GRPO | 7/24 | 24/24 | 31/48 |
+
+Supervised tuning led this pilot overall. GRPO detected more missing evidence
+but rejected more supported cases. These results measure the synthetic task.
+The project keeps Qwen3.8-27B as a possible scale-up after private validation.
+
+## Evaluate locally against broker evidence
+
+Acquire the Qwen3-8B model files and the matching SFT adapter before running
+the evaluator. Install PyTorch, Transformers, Accelerate, PEFT and
+bitsandbytes with support for your local CUDA or CPU backend. The evaluator
+loads the base and adapters from local paths. The GRPO adapter is optional.
+
+```powershell
+$env:HF_HUB_OFFLINE = "1"
+$env:TRANSFORMERS_OFFLINE = "1"
+python evaluate_private_model.py private/october-evidence-cases.json --model artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft --output private/october-model-scorecard.json
+```
+
+The evidence scorecard breaks out supported and missing-evidence cases.
+Clean examples are selected from broker ties, so use them as regression cases
+and inspect the disagreement set alongside them. For the separate allocation
+and P&L benchmark, `lot_eval.py --predictions` accepts a JSON object keyed by
+case ID. Each prediction has a `quantity_by_open_date` object keyed by ISO
+dates and a `pnl` decimal string.
+
+## Source map
+
+| File | Role |
+| --- | --- |
+| `ledger.py` | CSV parsing, cash audit, and vertical spread candidates |
+| `option_lots.py` | Provisional option lot consumption and P&L |
+| `reconcile.py` | Closed-lot and holdings comparisons |
+| `lot_eval.py` | Broker-checked allocation and P&L evaluation |
+| `private_lot_cases.py` | Local opening-evidence prompts and labels |
+| `pilot_data.py`, `lot_pilot_data.py`, `rewards.py` | Synthetic cases and executable checks |
+| `train_pilot.py`, `evaluate_private_model.py` | GPU pilot and local checkpoint comparison |
+
+## Data handling
+
+Keep raw brokerage files, derived reports, private prompts, weights, and
+credentials out of Git. The repository ignores `private/`, `artifacts/`,
+CSV and JSONL exports, and adapter weights. Upload only the training code and
+synthetic cases to Runpod. Repository visibility is an additional control.
