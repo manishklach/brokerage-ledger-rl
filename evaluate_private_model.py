@@ -14,7 +14,7 @@ def main():
     parser.add_argument("cases", type=Path)
     parser.add_argument("--model", type=Path, required=True, help="Local Qwen3-8B checkpoint folder")
     parser.add_argument("--sft", type=Path, required=True)
-    parser.add_argument("--rl", type=Path, required=True)
+    parser.add_argument("--rl", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -58,9 +58,10 @@ def main():
     record("stock")
     model = PeftModel.from_pretrained(model, args.sft, adapter_name="sft")
     record("sft")
-    model.load_adapter(args.rl, adapter_name="rl")
-    model.set_adapter("rl")
-    record("rl")
+    if args.rl:
+        model.load_adapter(args.rl, adapter_name="rl")
+        model.set_adapter("rl")
+        record("rl")
 
 
 if __name__ == "__main__":
