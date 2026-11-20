@@ -248,3 +248,21 @@ match, the ledger returned the expected evidence for all 17 correct stock
 routes and all 18 supervised routes. Both models attempted an evidence
 check for all eight ambiguous and four no-match questions. All replies
 matched the JSON schema. Private prompts and replies are Git-ignored.
+
+### Ledger-controlled close resolution
+
+The filter benchmark reruns the same questions without candidate lists.
+Qwen extracts the ticker, expiration, strike, right, close month, and
+source line. The ledger matches those filters against the local evidence
+index and runs the evidence check only for a unique match.
+
+```powershell
+python query_benchmark.py private/hard-lot-holdout.json --output private/query-filter-benchmark.json
+python evaluate_gguf.py private/query-filter-benchmark.json --model artifacts/qwen3-8b-base/qwen3-8b-q4_0.gguf --tokenizer artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft/adapter.gguf --filter-index private/hard-lot-holdout.json --output private/query-filter-scorecard.json
+```
+
+Both models routed 26/30 correctly: 14/18 unique closes, 8/8
+clarifications, and 4/4 no-match cases. Stock extracted all filters
+exactly on 22/30 questions and SFT on 24/30. All 30 gold filter sets
+resolved correctly over the 196-case local evidence index. This test
+does not establish retrieval accuracy over a full brokerage account.

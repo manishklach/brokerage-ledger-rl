@@ -6,6 +6,7 @@ import random
 from collections import defaultdict
 from pathlib import Path
 
+from close_filters import extraction_prompt
 from ledger_evidence import decide, recorded_claim
 from rewards import unique_fields
 
@@ -51,7 +52,7 @@ def build(cases):
         raise ValueError("Need 18 unique contracts and eight contracts with repeated closes")
     result = []
 
-    def add(question, matches, operation, close_id, preferred_month=None):
+    def add(question, matches, operation, close_id, preferred_month=None, *, month=None, source_line=None):
         excluded = {r["contract"] for r in matches}
         others = [r for r in metadata if r["contract"] not in excluded]
         rng.shuffle(others)
@@ -59,8 +60,12 @@ def build(cases):
         distractors = (same_month or others)[:max(2, 6 - len(matches))]
         candidates = matches + distractors
         rng.shuffle(candidates)
+        ticker, expiry, strike, right = matches[0]["contract"].split()
         result.append({
             "id": f"query-{len(result) + 1:02d}", "question": prompt(question, candidates),
+            "filter_prompt": extraction_prompt(question),
+            "expected_filters": dict(ticker=ticker, expiry=expiry, strike=strike, right=right,
+                                     month=month, source_line=source_line),
             "candidates": candidates, "expected_status": operation, "expected_close_id": close_id,
         })
 
@@ -76,13 +81,15 @@ def build(cases):
         question = patterns[index % len(patterns)].format(
             option=option_name(row["contract"]), month=row["month"], line=row["close_id"].split("-")[-1],
         )
-        add(question, [row], CHECK, row["close_id"], row["month"])
+        source = int(row["close_id"].split("-")[-1]) if index % len(patterns) == 3 else None
+        add(question, [row], CHECK, row["close_id"], row["month"],
+            month=None if source else row["month"], source_line=source)
     for group in rng.sample(repeated, 8):
         add(f"Can you check the opening evidence for the close on my {option_name(group[0]['contract'])}?",
             group, "clarify", None)
     for row in rng.sample(single, 4):
         add(f"Check whether my February 2026 close on the {option_name(row['contract'])} has opening evidence.",
-            [row], "no_match", None, row["month"])
+            [row], "no_match", None, row["month"], month="2026-02")
     rng.shuffle(result)
     return result
 

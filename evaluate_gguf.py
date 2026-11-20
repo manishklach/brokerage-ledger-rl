@@ -7,26 +7,37 @@ from collections import Counter
 from contextlib import closing
 from pathlib import Path
 
+from close_filters import FILTER_SCHEMA, parse_filters, resolve
 from lot_pilot_data import score_lot
 from query_benchmark import query_score
 
 
-def evaluate(model, tokenizer, cases, *, query_cases=False):
+def evaluate(model, tokenizer, cases, *, query_cases=False, filter_index=None, grammar=None):
     replies = []
     correct_by_status = Counter()
     total_by_status = Counter()
     for case in cases:
+        question = case["filter_prompt"] if filter_index is not None else case["question"]
         prompt = tokenizer.apply_chat_template(
-            [{"role": "user", "content": case["question"]}], tokenize=False,
+            [{"role": "user", "content": question}], tokenize=False,
             add_generation_prompt=True, enable_thinking=False,
         )
         tokens = model.tokenize(prompt.encode(), add_bos=False, special=True)
         reply = model.create_completion(
-            tokens, max_tokens=80, temperature=0.0, top_k=0, top_p=1.0,
-            stop=["<|im_end|>", "<|endoftext|>"],
+            tokens, max_tokens=128 if filter_index is not None else 80, temperature=0.0, top_k=0, top_p=1.0,
+            stop=["<|im_end|>", "<|endoftext|>"], grammar=grammar,
         )["choices"][0]["text"]
         status = case["expected_status"]
-        if query_cases:
+        if filter_index is not None:
+            filters = parse_filters(reply)
+            output = resolve(reply, filter_index)
+            operation = output["operation"] == status
+            close_id = output.get("close_id") == case["expected_close_id"]
+            evidence = "expected_ledger" not in case or output.get("ledger") == case["expected_ledger"]
+            score = int(operation and close_id and evidence)
+            checks = {"filters_exact": filters == case["expected_filters"], "valid_filters": filters is not None,
+                      "operation": operation, "close_id": close_id, "decision": output}
+        elif query_cases:
             checks = query_score(reply, case)
             score = int(checks["exact"])
         else:
@@ -55,7 +66,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--sft-only", action="store_true", help="Skip the stock checkpoint")
-    parser.add_argument("--query-cases", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--query-cases", action="store_true")
+    modes.add_argument("--filter-index", type=Path, help="Resolve extracted filters against this evidence index")
     args = parser.parse_args()
 
     import llama_cpp as cpp
@@ -64,6 +77,8 @@ def main():
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
     if not cases:
         parser.error("Expected at least one evaluation case")
+    filter_index = None if args.filter_index is None else json.loads(args.filter_index.read_text(encoding="utf-8"))
+    grammar = None if filter_index is None else cpp.LlamaGrammar.from_json_schema(FILTER_SCHEMA, verbose=False)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     results = {}
@@ -73,7 +88,8 @@ def main():
         n_threads_batch=args.threads, n_gpu_layers=0, verbose=False,
     )) as model:
         def record(stage):
-            for result in evaluate(model, tokenizer, cases, query_cases=args.query_cases):
+            for result in evaluate(model, tokenizer, cases, query_cases=args.query_cases,
+                                   filter_index=filter_index, grammar=grammar):
                 results[stage] = result
                 temporary = args.output.with_suffix(".tmp")
                 temporary.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
