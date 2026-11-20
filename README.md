@@ -5,6 +5,50 @@ post-training an open-weight model with verifiable rewards. A deterministic
 ledger handles quantities and cash. The model learns to identify supporting
 transaction rows and flag missing evidence. The project analyzes past trades.
 
+## What we trained
+
+We post-trained Qwen3-8B on a Runpod NVIDIA RTX 4090 using custom synthetic
+brokerage examples. Supervised fine-tuning (SFT) trained a LoRA adapter.
+Follow-up Group Relative Policy Optimization (GRPO) runs tested executable
+rewards. Schwab records were used locally for evaluation and never updated
+the model weights.
+
+The checkpoint is a specialized Qwen3-8B variant made from the original base
+model and its matching LoRA adapter. SFT and GRPO are both forms of
+post-training. The benchmark results do not establish state-of-the-art
+performance.
+
+| Evaluation | Result | Scope |
+| --- | --- | --- |
+| October opening evidence | Stock 32/53, supervised 53/53 | Exact status and supporting row IDs |
+| Harder private holdout | Supervised 140/196 | Opening evidence across additional months |
+| Ledger-controlled close routing | Stock and supervised both 26/30 | Filter extraction over a 196-case local index |
+| Portfolio, position, and tax questions | Supervised 27/40 rubric points | Answer synthesis from prepared evidence. Tax amounts were unavailable. |
+
+SFT produced the clearest gains. RL sometimes improved detection of missing
+evidence but made the model reject more supported cases. This is a small
+version of Applied Compute's workflow of adapting a base model and measuring
+it on a domain task. AC2 also manages enterprise serving and ongoing model
+improvement. [Applied Compute's AC2 overview](https://www.appliedcompute.com/platform/introducing-ac2)
+
+## Supporting more Schwab exports
+
+We have tested Schwab transaction history, realized gain/loss detail, and
+position snapshot CSV layouts. New data in the same layouts can be imported.
+Other Schwab layouts may need parser work for alternate headers, title or
+subtotal rows, missing fields, or account identifiers. Test each new format
+with redacted or synthetic fixtures and reconcile row counts and signed
+amounts before relying on it.
+
+Import new trades as ledger data. Once an export maps to the same ledger
+fields, its layout does not require retraining. Consider more SFT when a
+repeatable interpretation error survives fixes to the parser, ledger, or
+prompt. One candidate is confusing a close month with an option expiration.
+Turn the error into labeled question-to-filter examples and compare stock,
+the existing adapter, and the new adapter on a fresh holdout. Keep contracts
+or time periods separate between training and evaluation. Make a separate
+data-handling decision before using any real brokerage rows for cloud training.
+
 ## What the project does
 
 1. Normalize one account's Schwab transaction export, keeping source row
@@ -273,3 +317,34 @@ The [TQQQ, SOXL, and XLK benchmark](PORTFOLIO_QUESTION_BENCHMARK.md) defines
 20 portfolio risk, position, and tax-reporting questions with input
 requirements and scoring criteria. Prepare expected values from local
 brokerage data before scoring model answers.
+
+## Packaging
+
+Use a **source ZIP** for the current CLI prototype. The ledger and its tests
+run with Python 3.11+ and the standard library. Build the ZIP from a reviewed
+Git commit so recipients can reproduce the exact source version.
+
+```powershell
+git ls-files
+New-Item -ItemType Directory -Force artifacts | Out-Null
+git archive --format=zip --prefix=brokerage-ledger-rl/ --output=artifacts/brokerage-ledger-rl-source.zip HEAD
+tar -tf artifacts/brokerage-ledger-rl-source.zip
+```
+
+Review the archive listing before sharing. Git archives every tracked file
+at the selected commit, even if an ignore rule would match it. After
+extracting the ZIP, run `python -m unittest -v` and use the local workflow
+above with your own exports.
+
+| Component | How to package it |
+| --- | --- |
+| Base model and tokenizer | Obtain Qwen3-8B from its publisher and record the revision or checksums. For CPU inference, use a compatible GGUF and local tokenizer files. |
+| Supervised LoRA | Distribute the matching adapter and its configuration separately. For llama.cpp, provide the converted adapter GGUF and record its conversion settings and checksum. |
+| Local inference | Use a Python environment with Transformers and a compatible llama-cpp-python build. The CPU benchmark used llama-cpp-python 0.3.35. |
+| GPU training | Use the source ZIP with `requirements-pilot.txt` in a CUDA-enabled PyTorch environment. The pilot generates its own synthetic examples. |
+| Brokerage data | Each user supplies local exports. Keep exports, derived reports, private prompts, model replies, and credentials outside distributed bundles. |
+
+A source ZIP plus a separate adapter is the simplest handoff. A Python
+wheel or desktop installer would require additional packaging work. Include
+the source commit, base model revision, adapter checksum, and tested
+runtime versions with a release.
