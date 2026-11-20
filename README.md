@@ -10,8 +10,9 @@ transaction rows and flag missing evidence. The project analyzes past trades.
 We post-trained Qwen3-8B on a Runpod NVIDIA RTX 4090 using custom synthetic
 brokerage examples. Supervised fine-tuning (SFT) trained a LoRA adapter.
 Follow-up Group Relative Policy Optimization (GRPO) runs tested executable
-rewards. Schwab records were used locally for evaluation and never updated
-the model weights.
+rewards. The early runs used synthetic data only. A later SFT run used
+redacted examples derived from the 2025 Schwab reconciliation. The raw
+exports stayed local.
 
 The checkpoint is a specialized Qwen3-8B variant made from the original base
 model and its matching LoRA adapter. SFT and GRPO are both forms of
@@ -21,6 +22,7 @@ performance.
 | Evaluation | Result | Scope |
 | --- | --- | --- |
 | October opening evidence | Stock 32/53, supervised 53/53 | Exact status and supporting row IDs |
+| Redacted 2025 broker-link holdout | Stock 0/54, previous SFT 11/54, new SFT 54/54 | Exact status and aliases on held-out contracts with the same prompt format |
 | Harder private holdout | Supervised 140/196 | Opening evidence across additional months |
 | Ledger-controlled close routing | Stock and supervised both 26/30 | Filter extraction over a 196-case local index |
 | Portfolio, position, and tax questions | Supervised 27/40 rubric points | Answer synthesis from prepared evidence. Tax amounts were unavailable. |
@@ -372,3 +374,21 @@ Opening records are linked by the broker's opening date where available,
 with side and quantity checks and explicit statuses for gaps. A group
 match corroborates the available source rows. It does not assign individual
 fills within a many-to-many group or reconstruct inventory before the export.
+
+### 2025 broker-link supervised fine-tune
+
+Generate redacted examples locally, then pass the explicit split to the GPU
+pilot. The generator keeps each instrument in one split and omits the
+original ticker, dates, dollar amounts, and source IDs. Each prompt gives
+reconciled evidence descriptions and asks for a status and temporary
+source aliases.
+
+```powershell
+python broker_training_examples.py private/2025-period-review.json --output private/broker-sft-redacted.json
+python train_pilot.py --task lot --examples-file private/broker-sft-redacted.json --sft-steps 160 --rl-steps 0 --output artifacts/broker-sft
+```
+
+Training used 270 examples. The 54 held-out examples use the same prompt
+format and test whether the model can cite provided evidence labels.
+The result does not measure retrieval from raw brokerage records or
+accuracy on new question formats.

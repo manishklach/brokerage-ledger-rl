@@ -43,7 +43,13 @@ def main():
     parser.add_argument("--train-count", type=int, default=128)
     parser.add_argument("--prior-sft", type=Path, help="Also score an existing adapter before training")
     parser.add_argument("--task", choices=["spread", "lot", "hard-lot"], default="spread")
+    parser.add_argument("--examples-file", type=Path, help="JSON with explicit train and eval splits")
     args = parser.parse_args()
+    if args.rl_steps < 0:
+        parser.error("--rl-steps cannot be negative")
+    supplied = json.loads(args.examples_file.read_text(encoding="utf-8")) if args.examples_file else None
+    if supplied is not None and (args.task != "lot" or not all(supplied.get(key) for key in ("train", "eval"))):
+        parser.error("--examples-file requires --task lot and nonempty train and eval splits")
     examples, scorer = {
         "spread": (cases, score_spread),
         "lot": (lot_cases, score_lot),
@@ -69,7 +75,9 @@ def main():
 
     def dataset(split, count):
         rows = []
-        for example in examples(split, count):
+        source = supplied[split] if supplied is not None else examples(split, count)
+        for source_row in source:
+            example = dict(source_row)
             question = example.pop("question")
             prompt = tokenizer.apply_chat_template(
                 [{"role": "user", "content": question}], tokenize=False,
@@ -112,6 +120,8 @@ def main():
     sft.save_model(str(args.output / "sft"))
     del sft
     record("sft")
+    if args.rl_steps == 0:
+        return
 
     reward = hard_lot_reward if args.task == "hard-lot" else scorer
 
