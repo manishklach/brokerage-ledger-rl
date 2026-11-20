@@ -348,3 +348,18 @@ A source ZIP plus a separate adapter is the simplest handoff. A Python
 wheel or desktop installer would require additional packaging work. Include
 the source commit, base model revision, adapter checksum, and tested
 runtime versions with a release.
+
+## Annual broker review
+
+With both CSVs for the same account, generate the local annual report:
+
+```powershell
+python period_review.py "private/inputs/2025 Transactions.csv" "private/inputs/2025 Realized.csv" --year 2025 --output private/2025-period-review.json
+```
+
+The report includes monthly transaction cash, option-close comparisons,
+and broker-reported short-term and long-term realized amounts by
+underlying. It keeps source row numbers, flags lots opened before the
+transaction export, and compares proceeds less basis with the reported
+gain and disallowed loss. It reports Schwab's fields as provided. It
+does not infer replacement lots or resolve close-date mismatches.
