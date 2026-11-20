@@ -266,3 +266,10 @@ clarifications, and 4/4 no-match cases. Stock extracted all filters
 exactly on 22/30 questions and SFT on 24/30. All 30 gold filter sets
 resolved correctly over the 196-case local evidence index. This test
 does not establish retrieval accuracy over a full brokerage account.
+
+## Portfolio and position question benchmark
+
+The [TQQQ, SOXL, and XLK benchmark](PORTFOLIO_QUESTION_BENCHMARK.md) defines
+20 portfolio risk, position, and tax-reporting questions with input
+requirements and scoring criteria. Prepare expected values from local
+brokerage data before scoring model answers.
