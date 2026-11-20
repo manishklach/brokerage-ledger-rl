@@ -363,3 +363,12 @@ underlying. It keeps source row numbers, flags lots opened before the
 transaction export, and compares proceeds less basis with the reported
 gain and disallowed loss. It reports Schwab's fields as provided. It
 does not infer replacement lots or resolve close-date mismatches.
+
+The realized export is the source of each broker lot's reported open/close
+allocation. The annual review joins its Transaction Closed Date to
+transaction events and checks quantity at the instrument-and-date level.
+It preserves the displayed Closed Date alongside the transaction date.
+Opening records are linked by the broker's opening date where available,
+with side and quantity checks and explicit statuses for gaps. A group
+match corroborates the available source rows. It does not assign individual
+fills within a many-to-many group or reconstruct inventory before the export.

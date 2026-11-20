@@ -10,10 +10,71 @@ from ledger import cash_total, number, parse_date, read_export
 from reconcile import contract, export_rows, realized_comparison
 
 FIELDS = {
-    "Symbol", "Closed Date", "Opened Date", "Proceeds", "Cost Basis (CB)",
+    "Symbol", "Closed Date", "Opened Date", "Quantity", "Proceeds", "Cost Basis (CB)",
     "Gain/Loss ($)", "Long Term Gain/Loss", "Short Term Gain/Loss", "Term",
     "Wash Sale?", "Disallowed Loss",
 }
+
+OPEN_ACTIONS = {"Buy", "Sell Short", "Buy to Open", "Sell to Open", "Reinvest Shares"}
+CLOSE_ACTIONS = {"Sell", "Buy to Cover", "Buy to Close", "Sell to Close",
+                 "Expired", "Assigned", "Exchange or Exercise"}
+OPEN_SIDE = {"Sell": {"Buy", "Reinvest Shares"}, "Buy to Cover": {"Sell Short"},
+             "Sell to Close": {"Buy to Open"}, "Buy to Close": {"Sell to Open"}}
+
+
+def link_broker_lots(transactions, lots, first_effective):
+    opening = defaultdict(list)
+    closing = defaultdict(list)
+    for row in transactions:
+        if not row.quantity:
+            continue
+        key = (contract(row.symbol) or row.symbol, row.effective_date.isoformat())
+        if row.action in OPEN_ACTIONS:
+            opening[key].append(row)
+        elif row.action in CLOSE_ACTIONS:
+            closing[key].append(row)
+
+    close_groups = defaultdict(list)
+    open_groups = defaultdict(list)
+    for lot in lots:
+        close_groups[lot["instrument"], lot["transaction_closed"]].append(lot)
+        open_groups[lot["instrument"], lot["opened"]].append(lot)
+
+    for key, group in close_groups.items():
+        rows = closing[key]
+        statuses = {row.action for row in rows}
+        exact = len(statuses) == 1 and sum(abs(row.quantity) for row in rows) == sum(
+            lot["quantity"] for lot in group
+        )
+        for lot in group:
+            lot["close_evidence"] = {
+                "status": "quantity_match" if exact else "unresolved" if rows else "missing",
+                "transaction_lines": [row.source_line for row in rows],
+                "actions": sorted(statuses),
+            }
+
+    for key, group in open_groups.items():
+        rows = opening[key]
+        for lot in group:
+            close = lot["close_evidence"]
+            sides = OPEN_SIDE.get(close["actions"][0]) if close["status"] == "quantity_match" else None
+            candidates = [row for row in rows if sides is None or row.action in sides]
+            status = "predates_export" if lot["opened"] < first_effective.isoformat() else "missing"
+            if candidates:
+                required = sum(item["quantity"] for item in group)
+                available = sum(abs(row.quantity) for row in candidates)
+                if available < required:
+                    status = "quantity_shortfall"
+                elif sides is None:
+                    status = "direction_unresolved"
+                elif available == required:
+                    status = "quantity_match"
+                elif len(candidates) == 1:
+                    status = "single_row_partial"
+                else:
+                    status = "ambiguous"
+            lot["open_evidence"] = {"status": status,
+                                    "transaction_lines": [row.source_line for row in candidates]}
 
 
 def review(transactions, realized_path, year):
@@ -29,8 +90,12 @@ def review(transactions, realized_path, year):
         if closed.year != year:
             continue
         opened = parse_date(row["Opened Date"])
+        transaction_closed = parse_date(row.get("Transaction Closed Date") or row["Closed Date"])
         option = contract(row["Symbol"])
         underlying = option.split()[0] if option else row["Symbol"]
+        quantity = number(row["Quantity"])
+        if quantity is None or not quantity:
+            raise ValueError(f"Missing realized quantity on broker source line {line}")
         amounts = {
             "proceeds": number(row["Proceeds"]), "broker_basis": number(row["Cost Basis (CB)"]),
             "realized": number(row["Gain/Loss ($)"]),
@@ -57,11 +122,14 @@ def review(transactions, realized_path, year):
             for field, amount in amounts.items():
                 totals[key][field] += amount
         details.append({
-            "broker_source_line": line, "underlying": underlying, "opened": opened.isoformat(),
-            "closed": closed.isoformat(), "term": row["Term"], "wash_sale_flag": flagged,
+            "broker_source_line": line, "underlying": underlying, "instrument": option or row["Symbol"],
+            "is_option": option is not None, "quantity": abs(quantity), "opened": opened.isoformat(),
+            "closed": closed.isoformat(), "transaction_closed": transaction_closed.isoformat(),
+            "term": row["Term"], "wash_sale_flag": flagged,
             "opening_predates_transaction_export": opened < first_effective, **amounts,
         })
 
+    link_broker_lots(transactions, details, first_effective)
     monthly = {}
     for month in range(1, 13):
         label = f"{prefix}-{month:02d}"
