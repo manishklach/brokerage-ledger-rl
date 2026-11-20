@@ -178,10 +178,11 @@ dates and a `pnl` decimal string.
 
 ## Data handling
 
-Keep raw brokerage files, derived reports, private prompts, weights, and
-credentials out of Git. The repository ignores `private/`, `artifacts/`,
-CSV and JSONL exports, and adapter weights. Upload only the training code and
-synthetic cases to Runpod. Repository visibility is an additional control.
+Put brokerage exports in the Git-ignored `private/inputs/` directory.
+Keep derived reports and private prompts under `private/`, and model
+checkpoints under `artifacts/`. Check new commits for sensitive files
+before pushing. Runpod examples are synthetic or deliberately redacted.
+Raw exports stay local.
 
 ### October holdout result
 
