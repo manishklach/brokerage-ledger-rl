@@ -82,3 +82,17 @@ using position marks or gains to infer assignment obligations, assuming
 unconfirmed spread legs and deliverables, and confusing a close month with
 the option expiration. The question evidence, replies, scoring notes, and
 holdings annex remain local.
+
+## Local CSV-to-report workflow
+
+The December 2025 review and November 19, 2026 holdings snapshot supplied
+the reporting periods for this run. The two tax questions used the full 2025
+realized export. The scripted queries scored **33/40**. Seven answers were
+complete, seven had partial evidence, three needed clarification, and
+three identified missing inputs. Correct clarification or missing-input
+responses can earn full credit under the rubric.
+
+The run performed record lookup and calculations from local inputs for all
+20 query IDs. It used fixed question routing, so this score does not measure
+model interpretation of free-form portfolio questions or replace the
+27/40 model-synthesis result above.

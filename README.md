@@ -393,3 +393,28 @@ Training used 270 examples. The 54 held-out examples use the same prompt
 format and test whether the model can cite provided evidence labels.
 The result does not measure retrieval from raw brokerage records or
 accuracy on new question formats.
+
+## Monthly portfolio review
+
+Run the local workflow from the transaction, realized gain/loss, and dated
+positions exports. The optional evidence index supports the benchmark's
+September close question.
+
+```powershell
+python portfolio_review.py "private/inputs/2025 Transactions.csv" "private/inputs/2025 Realized.csv" private/inputs/holdings-2026-11-19.csv --month 2025-12 --as-of 2026-11-19 --evidence-index private/hard-lot-holdout.json --output private/december-2025-portfolio-review.json
+```
+
+The report keeps the realized reporting month and holdings snapshot date
+explicit. It calculates broker-reported realized results by underlying and
+term, marks-based concentration and option expirations, and points to source
+CSV rows. Reported market values and gross marks measure the stated marks.
+Directional delta exposure and stress repricing require separate inputs.
+
+The first run covered 198 December transactions and 79 realized lots, of
+which 75 linked to closing transaction groups by date and quantity. The
+scripted workflow scored 33/40 on the documented 20 questions. It answered
+seven, returned partial evidence on seven, requested clarification on three,
+and flagged missing inputs on three. The tax answers were checked against
+the supplied 2025 realized CSV. This run used numbered queries and automatic
+record lookup. The earlier 27/40 run tested a model answering from prepared
+evidence and measures a different part of the system.
