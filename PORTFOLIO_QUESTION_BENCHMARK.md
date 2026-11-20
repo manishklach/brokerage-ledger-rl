@@ -60,3 +60,25 @@ needed**, and **missing input**. Set expected amounts and source rows locally
 before running a model. Keep portfolio values, trade IDs, expected answers,
 and model replies under `private/`. This document defines the benchmark
 questions and scoring criteria. It does not report a benchmark run.
+
+## First local evaluation
+
+Qwen3-8B with the existing supervised evidence adapter scored **27/40** over
+20 locally generated responses. The model received a question-specific
+evidence packet, so this measured answer synthesis rather than record
+retrieval. A reviewer checked numerical claims against the holdings snapshot
+and applied the rubric above.
+
+| Section | Score |
+| --- | ---: |
+| Portfolio and risk | 11/18 |
+| Positions and trades | 12/18 |
+| Tax reporting | 4/4 |
+| **Total** | **27/40** |
+
+Both tax answers earned credit for identifying unavailable source evidence.
+The run did not verify any tax amount. The main zero-credit failures were
+using position marks or gains to infer assignment obligations, assuming
+unconfirmed spread legs and deliverables, and confusing a close month with
+the option expiration. The question evidence, replies, scoring notes, and
+holdings annex remain local.
