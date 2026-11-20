@@ -418,3 +418,23 @@ and flagged missing inputs on three. The tax answers were checked against
 the supplied 2025 realized CSV. This run used numbered queries and automatic
 record lookup. The earlier 27/40 run tested a model answering from prepared
 evidence and measures a different part of the system.
+
+### Portfolio routing GPU pilot
+
+The portfolio router maps a natural-language question to one of the 20
+documented ledger queries, or returns clarification or unsupported. The
+synthetic exercise measures intent classification. It does not extract
+arbitrary query parameters or execute ledger queries.
+
+```bash
+python train_pilot.py --task portfolio-route --train-count 264 --eval-count 44 --sft-steps 160 --rl-steps 0 --output artifacts/portfolio-route
+```
+
+The run used an RTX 4090 and 264 examples based on synthetic wording
+templates. The test used 44 separately worded questions, two per route,
+with the same route catalog supplied to each checkpoint. Stock Qwen3-8B,
+the prior broker-evidence adapter, and the new routing adapter each
+scored **38/44** exact. The new adapter fixed some individual routes
+but introduced others. All three confused at least one exposure ranking,
+bid/ask, and roll question. No brokerage records were uploaded for
+this run.

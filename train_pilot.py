@@ -7,6 +7,7 @@ from pathlib import Path
 from lot_pilot_data import hard_lot_cases, hard_lot_reward, lot_cases, score_lot
 from pilot_data import cases
 from rewards import score_spread
+from portfolio_training import routing_cases, score_route
 
 
 def evaluate(model, tokenizer, examples, scorer):
@@ -42,7 +43,7 @@ def main():
     parser.add_argument("--eval-count", type=int, default=16)
     parser.add_argument("--train-count", type=int, default=128)
     parser.add_argument("--prior-sft", type=Path, help="Also score an existing adapter before training")
-    parser.add_argument("--task", choices=["spread", "lot", "hard-lot"], default="spread")
+    parser.add_argument("--task", choices=["spread", "lot", "hard-lot", "portfolio-route"], default="spread")
     parser.add_argument("--examples-file", type=Path, help="JSON with explicit train and eval splits")
     args = parser.parse_args()
     if args.rl_steps < 0:
@@ -54,6 +55,7 @@ def main():
         "spread": (cases, score_spread),
         "lot": (lot_cases, score_lot),
         "hard-lot": (hard_lot_cases, score_lot),
+        "portfolio-route": (routing_cases, score_route),
     }[args.task]
 
     import torch
