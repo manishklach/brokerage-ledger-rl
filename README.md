@@ -521,3 +521,19 @@ without reading brokerage files. Keep the evaluation split out of model
 updates. NVIDIA's published NeMo AutoModel recipes use four GB200s, while
 SkyRL documents a Mini training configuration on eight B200s. The single
 B200 setup above is verified for inference. [NeMo AutoModel recipe](https://docs.nvidia.com/nemo/automodel/nightly/model-coverage/vision-language-models/thinkingmachines/Inkling-2-Mini) · [SkyRL recipe](https://docs.skyrl.ai/docs/models/inkling2)
+
+### Lot evidence evaluation
+
+Use the report's redacted lot examples to evaluate whether Inkling returns the
+expected evidence status and cites exactly the expected row aliases. The
+evaluator adds 24 synthetic unverified-close cases and reports exact accuracy
+for each status. Keep the real exports and scorecard in the ignored
+`private/` folder.
+
+```bash
+python broker_training_examples.py private/2024-period-review.json --output private/inkling-2024-lot-evidence.json
+python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --lot-holdout private/inkling-2024-lot-evidence.json --output private/inkling-2024-stock-h100.json
+```
+
+The prompts describe already-classified ledger evidence. This benchmark
+measures interpretation and citation accuracy for that evidence.
