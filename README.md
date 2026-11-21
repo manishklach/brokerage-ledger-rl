@@ -589,3 +589,22 @@ python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model th
 
 The scorecard records exact matches by status, failed requests, truncation,
 and latency for completed requests.
+
+### Expanded Inkling holdout
+
+The expanded set has 48 synthetic contracts across eight month boundaries,
+with 16 cases each for supported, ambiguous, and missing evidence. It
+includes exact split fills, competing allocations, one-contract shortfalls,
+and distractors with a different strike, action, or date. The answer keys
+are checked against the quantity verifier. Keep this set out of training
+and prompt selection. The six earlier cases remain available as a regression
+set using `--fresh-evidence`.
+
+```bash
+python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --expanded-evidence --output private/inkling-expanded-evidence.json
+```
+
+The report adds exact scores by scenario, status-only accuracy, and false
+claims of support. The cases test opening evidence rules on synthetic data.
+A separate broker-backed holdout requires contracts that were kept out of the
+earlier experiments.

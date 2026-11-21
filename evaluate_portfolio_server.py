@@ -10,7 +10,7 @@ from pathlib import Path
 from collections import Counter
 
 from broker_training_examples import make_examples
-from inkling_evidence_holdout import evidence_cases
+from inkling_evidence_holdout import evidence_cases, expanded_evidence_cases
 from portfolio_training import routing_cases, score_route
 from rewards import unique_fields
 
@@ -31,13 +31,17 @@ def lot_holdout(path):
     return cases + [row for split in make_examples(synthetic).values() for row in split]
 
 
-def score_lot(reply, case):
+def lot_answer(reply):
     try:
         answer = json.loads(reply, object_pairs_hook=unique_fields)
     except ValueError:
-        return False
-    if (not isinstance(answer, dict) or set(answer) != {"status", "source_lines"}
-            or answer["status"] != case["expected_cash"]):
+        return {}
+    return answer if isinstance(answer, dict) else {}
+
+
+def score_lot(reply, case):
+    answer = lot_answer(reply)
+    if set(answer) != {"status", "source_lines"} or answer["status"] != case["expected_cash"]:
         return False
     lines = answer.get("source_lines")
     return (isinstance(lines, list) and all(type(line) is int for line in lines)
@@ -55,6 +59,7 @@ def main():
     dataset = parser.add_mutually_exclusive_group()
     dataset.add_argument("--lot-holdout", type=Path)
     dataset.add_argument("--fresh-evidence", action="store_true")
+    dataset.add_argument("--expanded-evidence", action="store_true")
     args = parser.parse_args()
     key = os.environ.get("PORTFOLIO_BENCHMARK_API_KEY")
     if not key:
@@ -95,13 +100,15 @@ def main():
         time.sleep(5)
 
     print("Model server ready", flush=True)
-    if args.fresh_evidence:
+    if args.expanded_evidence:
+        cases = expanded_evidence_cases()
+    elif args.fresh_evidence:
         cases = evidence_cases()
     elif args.lot_holdout:
         cases = lot_holdout(args.lot_holdout)
     else:
         cases = routing_cases("eval", 44)
-    evidence_eval = args.fresh_evidence or args.lot_holdout is not None
+    evidence_eval = args.expanded_evidence or args.fresh_evidence or args.lot_holdout is not None
 
     def evaluate(case):
         payload = {
@@ -139,6 +146,18 @@ def main():
         correct_by_status = Counter(row["target"] for row in replies if row["score"])
         result["by_status"] = {label: {"correct": correct_by_status[label], "total": total}
                                for label, total in sorted(totals.items())}
+    if args.expanded_evidence:
+        totals = Counter(case["scenario"] for case in cases)
+        correct = Counter(case["scenario"] for case, row in zip(cases, replies, strict=True) if row["score"])
+        result["by_scenario"] = {name: {"correct": correct[name], "total": total}
+                                 for name, total in sorted(totals.items())}
+        result["status_correct"] = sum(
+            lot_answer(row.get("reply", "")).get("status") == row["target"] for row in replies
+        )
+        result["false_supports"] = sum(
+            row["target"] != "supported" and lot_answer(row.get("reply", "")).get("status") == "supported"
+            for row in replies
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(f"{result['correct']}/{result['total']}", flush=True)

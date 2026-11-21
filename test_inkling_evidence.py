@@ -1,8 +1,10 @@
 import json
 import unittest
+from collections import Counter
 
 from evaluate_portfolio_server import score_lot
-from inkling_evidence_holdout import evidence_cases
+from inkling_evidence_holdout import evidence_cases, expanded_evidence_cases
+from lot_pilot_data import classify
 
 
 class InklingEvidenceTests(unittest.TestCase):
@@ -19,3 +21,15 @@ class InklingEvidenceTests(unittest.TestCase):
         for case in cases:
             response = json.dumps({"status": case["expected_cash"], "source_lines": case["expected_lines"]})
             self.assertTrue(score_lot(response, case))
+
+    def test_expanded_holdout_matches_independent_quantity_verifier(self):
+        cases = expanded_evidence_cases()
+        self.assertEqual(len({case["contract"] for case in cases}), 48)
+        self.assertEqual(Counter(case["expected_cash"] for case in cases),
+                         {"supported": 16, "ambiguous": 16, "missing_evidence": 16})
+        for case in cases:
+            rows = [{"line": line, "date": str(day), "action": action, "quantity": qty}
+                    for line, day, contract, action, qty in case["rows"] if contract == case["contract"]]
+            with self.subTest(case=case["id"]):
+                self.assertEqual(classify(case["required_by_date"], rows, case["opening_action"]),
+                                 (case["expected_cash"], case["expected_lines"]))
