@@ -1,9 +1,9 @@
 # Brokerage Ledger RL
 
-A local-first Schwab portfolio and options analysis project. A deterministic
-ledger reconciles broker lots, calculates portfolio figures, and cites
-transaction rows. The language model routes questions and identifies missing
-evidence. The workflow is read-only.
+A local-first toolkit for brokerage portfolio and options analysis. A deterministic
+ledger reconciles broker-reported lots, calculates portfolio figures, and cites
+source rows. The language model routes questions and identifies missing evidence.
+Schwab is the first supported CSV integration. The workflow is read-only.
 
 ## Current model direction
 
@@ -48,7 +48,28 @@ version of Applied Compute's workflow of adapting a base model and measuring
 it on a domain task. AC2 also manages enterprise serving and ongoing model
 improvement. [Applied Compute's AC2 overview](https://www.appliedcompute.com/platform/introducing-ac2)
 
-## Supporting more Schwab exports
+## Broker integrations
+
+The portfolio engine accepts normalized transactions, realized lots, and positions
+through `portfolio_review.build_portfolio_report`. An integration translates a
+broker's export to those records and preserves source row numbers. The Schwab
+readers are the working example. The existing CSV command-line tools currently
+load Schwab formats. Other brokers can use the Python API by supplying their own
+readers.
+
+| Input | Normalized contract | Schwab example |
+| --- | --- | --- |
+| Transactions | A nonempty list of `ledger.Transaction` records with Python dates, canonical actions, source lines, and `Decimal` values for numeric fields | `ledger.read_export` |
+| Realized lots | Mappings with `broker_source_line`, `instrument`, `underlying`, `is_option`, positive `quantity`, ISO dates `opened`, `closed`, `transaction_closed`, `term`, `wash_sale_flag`, and the `portfolio_review.AMOUNTS` decimal fields | `period_review.read_schwab_realized` |
+| Positions | Mappings with `source_line`, `symbol`, `underlying`, `kind`, `is_option`, and nullable decimal fields `quantity`, `market_value`, `unrealized` | `portfolio_review.read_holdings` |
+
+Use `ROOT YYYY-MM-DD STRIKE C/P` consistently for option instruments and
+`ledger.OPTION_ACTIONS` for option opens and closes. Map asset kinds to the
+values used in `holdings_review` and keep each snapshot's date with its source.
+Validate the new broker's date, quantity, cash, and lot conventions against its
+own reports. Existing broker-derived evaluations are scoped to Schwab.
+
+### Schwab export coverage
 
 We have tested Schwab transaction history, realized gain/loss detail, and
 position snapshot CSV layouts. New data in the same layouts can be imported.
@@ -68,12 +89,12 @@ data-handling decision before using any real brokerage rows for cloud training.
 
 ## What the project does
 
-1. Normalize one account's Schwab transaction export, keeping source row
+1. Normalize one account's transaction export, keeping source row
    numbers, posted dates, effective dates, quantities, reported amounts, and
    fees.
 2. Audit transaction cash and propose vertical spread pairings for review.
 3. Reconstruct provisional option lots, then compare opening-date allocations,
-   quantities, and realized P&L with Schwab's closed-lot detail. Compare signed
+   quantities, and realized P&L with broker-reported closed-lot detail. Compare signed
    position quantities with a separate holdings snapshot.
 4. Post-train Qwen3-8B on synthetic cases using supervised fine-tuning (SFT) and
    Group Relative Policy Optimization (GRPO). A Python verifier scores exact
@@ -81,7 +102,7 @@ data-handling decision before using any real brokerage rows for cloud training.
 5. Evaluate checkpoints on the same held-out inputs. Synthetic evaluation can
    run on a GPU Pod. Broker-derived prompts and labels stay local.
 
-## Inputs
+## Schwab example inputs
 
 | Schwab export | Fields used | Purpose |
 | --- | --- | --- |

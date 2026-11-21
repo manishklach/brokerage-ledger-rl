@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from ledger import cash_total, number, parse_date, read_export
-from reconcile import contract, export_rows, realized_comparison
+from reconcile import compare_realized_lots, contract, export_rows
 
 FIELDS = {
     "Symbol", "Closed Date", "Opened Date", "Quantity", "Proceeds", "Cost Basis (CB)",
@@ -77,17 +77,10 @@ def link_broker_lots(transactions, lots, first_effective):
                                     "transaction_lines": [row.source_line for row in candidates]}
 
 
-def review(transactions, realized_path, year):
-    prefix = str(year)
-    first_posted = min(row.posted_date for row in transactions)
-    first_effective = min(row.effective_date for row in transactions)
-    last_posted = max(row.posted_date for row in transactions)
-    totals = defaultdict(lambda: defaultdict(Decimal))
-    details = []
-    issues = defaultdict(list)
+def read_schwab_realized(realized_path, *, year=None):
     for line, row in export_rows(realized_path, FIELDS):
         closed = parse_date(row["Closed Date"])
-        if closed.year != year:
+        if year is not None and closed.year != year:
             continue
         opened = parse_date(row["Opened Date"])
         transaction_closed = parse_date(row.get("Transaction Closed Date") or row["Closed Date"])
@@ -105,9 +98,38 @@ def review(transactions, realized_path, year):
         }
         if any(value is None for value in amounts.values()):
             raise ValueError(f"Missing realized dollars on broker source line {line}")
+        yield {
+            "broker_source_line": line, "underlying": underlying, "instrument": option or row["Symbol"],
+            "is_option": option is not None, "quantity": abs(quantity), "opened": opened.isoformat(),
+            "closed": closed.isoformat(), "transaction_closed": transaction_closed.isoformat(),
+            "term": row["Term"], "wash_sale_flag": row["Wash Sale?"].strip().lower() == "yes",
+            **amounts,
+        }
+
+
+def review(transactions, realized_path, year):
+    return review_lots(transactions, read_schwab_realized(realized_path, year=year), year)
+
+
+def review_lots(transactions, realized_lots, year):
+    prefix = str(year)
+    first_posted = min(row.posted_date for row in transactions)
+    first_effective = min(row.effective_date for row in transactions)
+    last_posted = max(row.posted_date for row in transactions)
+    totals = defaultdict(lambda: defaultdict(Decimal))
+    details = []
+    issues = defaultdict(list)
+    for lot in realized_lots:
+        if not lot["closed"].startswith(prefix + "-"):
+            continue
+        line = lot["broker_source_line"]
+        underlying = lot["underlying"]
+        amounts = {field: lot[field] for field in (
+            "proceeds", "broker_basis", "realized", "short_term", "long_term", "disallowed_loss_reported",
+        )}
         if amounts["short_term"] + amounts["long_term"] != amounts["realized"]:
             issues["term_amounts_do_not_add"].append(line)
-        flagged = row["Wash Sale?"].strip().lower() == "yes"
+        flagged = lot["wash_sale_flag"]
         difference = amounts["realized"] - (amounts["proceeds"] - amounts["broker_basis"])
         if difference:
             check = (
@@ -122,11 +144,7 @@ def review(transactions, realized_path, year):
             for field, amount in amounts.items():
                 totals[key][field] += amount
         details.append({
-            "broker_source_line": line, "underlying": underlying, "instrument": option or row["Symbol"],
-            "is_option": option is not None, "quantity": abs(quantity), "opened": opened.isoformat(),
-            "closed": closed.isoformat(), "transaction_closed": transaction_closed.isoformat(),
-            "term": row["Term"], "wash_sale_flag": flagged,
-            "opening_predates_transaction_export": opened < first_effective, **amounts,
+            **lot, "opening_predates_transaction_export": lot["opened"] < first_effective.isoformat(),
         })
 
     link_broker_lots(transactions, details, first_effective)
@@ -134,7 +152,7 @@ def review(transactions, realized_path, year):
     for month in range(1, 13):
         label = f"{prefix}-{month:02d}"
         rows = [row for row in transactions if row.posted_date.isoformat().startswith(label)]
-        groups = realized_comparison(transactions, realized_path, label)
+        groups = compare_realized_lots(transactions, details, label)
         monthly[label] = {
             "transaction_rows": len(rows), "net_transaction_cash": cash_total(rows),
             "option_close_comparison": groups,

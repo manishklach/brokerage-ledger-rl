@@ -17,7 +17,8 @@ def contract(symbol):
     if len(parts) != 4 or parts[3] not in {"C", "P"}:
         return None
     root, expiry, strike, right = parts
-    return f"{root} {parse_date(expiry)} {number(strike).normalize():f} {right}"
+    expiry_date = date.fromisoformat(expiry) if "-" in expiry else parse_date(expiry)
+    return f"{root} {expiry_date} {number(strike).normalize():f} {right}"
 
 
 def export_rows(path, required):
@@ -42,19 +43,27 @@ def export_rows(path, required):
 
 
 def realized_comparison(transactions, path, month):
+    required = {"Symbol", "Closed Date", "Opened Date", "Quantity", "Gain/Loss ($)", "Wash Sale?"}
+    lots = (
+        {"instrument": contract(row["Symbol"]), "closed": parse_date(row["Closed Date"]).isoformat(),
+         "broker_source_line": line, "opened": parse_date(row["Opened Date"]).isoformat(),
+         "quantity": abs(number(row["Quantity"])), "realized": number(row["Gain/Loss ($)"]),
+         "wash_sale_flag": row["Wash Sale?"].strip().lower() == "yes"}
+        for line, row in export_rows(path, required)
+        if contract(row["Symbol"]) and parse_date(row["Closed Date"]).isoformat().startswith(month + "-")
+    )
+    return compare_realized_lots(transactions, lots, month)
+
+
+def compare_realized_lots(transactions, lots, month):
     modeled = defaultdict(list)
     broker = defaultdict(list)
-    required = {"Symbol", "Closed Date", "Opened Date", "Quantity", "Gain/Loss ($)", "Wash Sale?"}
-    for line, row in export_rows(path, required):
-        symbol = contract(row["Symbol"])
-        closed = parse_date(row["Closed Date"]).isoformat()
-        if symbol and closed.startswith(month + "-"):
-            broker[symbol, closed].append({
-                "line": line,
-                "opened": parse_date(row["Opened Date"]).isoformat(),
-                "quantity": abs(number(row["Quantity"])),
-                "pnl": number(row["Gain/Loss ($)"]),
-                "wash_sale": row["Wash Sale?"].strip().lower() == "yes",
+    for lot in lots:
+        if lot["instrument"] and lot.get("is_option", True) and lot["closed"].startswith(month + "-"):
+            broker[lot["instrument"], lot["closed"]].append({
+                "line": lot["broker_source_line"], "opened": lot["opened"],
+                "quantity": lot["quantity"], "pnl": lot["realized"],
+                "wash_sale": lot["wash_sale_flag"],
             })
     for row in match_options(transactions, month)["closes"]:
         modeled[contract(row["contract"]), row["effective_date"]].append(row)

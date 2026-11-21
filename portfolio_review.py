@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ledger import number, read_export
 from ledger_evidence import decide, recorded_claim
-from period_review import review
+from period_review import read_schwab_realized, review_lots
 from reconcile import contract, export_rows
 
 ZERO = Decimal(0)
@@ -209,6 +209,30 @@ def answer_questions(monthly, annual, holdings, evidence_index, targets):
     }
 
 
+def build_portfolio_report(transactions, realized_lots, positions, period, as_of, targets, index=()):
+    """Analyze normalized records without reading broker exports."""
+    year = period.year
+    month_label = period.strftime("%Y-%m")
+    annual = review_lots(transactions, realized_lots, year)
+    lots = annual["broker_lots"]
+    month_lots = [r for r in lots if r["closed"].startswith(month_label + "-")]
+    month = {
+        "month": month_label, "year": year, "realized": realized_summary(month_lots),
+        "by_underlying": dict(sorted(
+            ((root, realized_summary(group)) for root, group in by_underlying(month_lots).items()),
+            key=lambda item: (-abs(item[1]["realized"]), item[0]),
+        )),
+        "monthly_transaction_review": annual["monthly"][month_label],
+        "broker_lots": month_lots,
+    }
+    holdings = holdings_review(positions, as_of, targets)
+    answers = answer_questions(month, lots, holdings, index, targets)
+    return {
+        "monthly": month, "holdings": holdings, "answers": answers,
+        "answer_status_counts": Counter(a["status"] for a in answers.values()),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("transactions", type=Path)
@@ -227,27 +251,14 @@ def main():
     as_of, positions = read_holdings(args.holdings)
     if as_of is not None and as_of != args.as_of:
         parser.error("--as-of disagrees with the holdings export date")
-    transactions = read_export(args.transactions)
-    annual = review(transactions, args.realized, period.year)
-    lots = annual["broker_lots"]
-    month_lots = [r for r in lots if r["closed"].startswith(args.month + "-")]
-    month = {
-        "month": args.month, "year": period.year, "realized": realized_summary(month_lots),
-        "by_underlying": dict(sorted(
-            ((root, realized_summary(group)) for root, group in by_underlying(month_lots).items()),
-            key=lambda item: (-abs(item[1]["realized"]), item[0]),
-        )),
-        "monthly_transaction_review": annual["monthly"][args.month],
-        "broker_lots": month_lots,
-    }
-    holdings = holdings_review(positions, args.as_of, args.tickers)
     index = json.loads(args.evidence_index.read_text(encoding="utf-8")) if args.evidence_index else []
-    answers = answer_questions(month, lots, holdings, index, args.tickers)
     report = {
         "sources": {"transactions": args.transactions.name, "realized": args.realized.name,
                     "holdings": args.holdings.name},
-        "monthly": month, "holdings": holdings, "answers": answers,
-        "answer_status_counts": Counter(a["status"] for a in answers.values()),
+        **build_portfolio_report(
+            read_export(args.transactions), read_schwab_realized(args.realized, year=period.year), positions,
+            period, args.as_of, args.tickers, index,
+        ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
