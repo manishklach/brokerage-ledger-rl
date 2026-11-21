@@ -6,6 +6,43 @@ I started with a simple question. Could I build a system that answers those ques
 
 The bigger idea is a research and operations tool for an active options book. I want to bring together realized and unrealized P&L, concentration, expirations, assignment exposure, margin, and broker-reported tax adjustments. Each of those numbers needs a date, a definition, and a trail back to the source. Getting that right turned out to be the most interesting part of the project.
 
+## How the pieces fit together
+
+```mermaid
+flowchart TB
+    CSV["Brokerage exports<br/>Transactions, realized lots, positions"] --> LEDGER["Local ledger<br/>Reconcile lots, calculate figures, retain source rows"]
+    LEDGER --> EXAMPLES["Redacted evidence examples<br/>Split by contract"]
+    LEDGER --> REPORT["Portfolio report JSON<br/>Figures, source rows, missing inputs"]
+
+    subgraph MODEL["Model evaluation and fine-tuning"]
+        direction TB
+        EXAMPLES --> TRAIN["Training split"]
+        EXAMPLES --> HOLDOUT["Held-out examples"]
+        BASE["Stock Inkling 2 Mini"] --> SCORE["Score status and exact citations"]
+        HOLDOUT --> SCORE
+        TRAIN -.-> SFT["Supervised fine-tuning<br/>Prepared, pending a baseline gap"]
+        BASE -.-> SFT
+        SFT -.-> SCORE
+    end
+
+    subgraph QUERY["Query workflow"]
+        direction TB
+        QUESTION["Type a portfolio question"] --> ROUTE["Inkling routes the question"]
+        ROUTE --> LOOKUP["Browser looks up the answer"]
+        REPORT --> LOOKUP
+        LOOKUP --> ANSWER["Answer, source rows, and missing evidence"]
+    end
+
+    classDef data fill:#173b40,stroke:#50b6ae,color:#fff;
+    classDef model fill:#352653,stroke:#a691d6,color:#fff;
+    classDef query fill:#1c3655,stroke:#75a7db,color:#fff;
+    class CSV,LEDGER,EXAMPLES,REPORT data;
+    class TRAIN,HOLDOUT,BASE,SCORE,SFT model;
+    class QUESTION,ROUTE,LOOKUP,ANSWER query;
+```
+
+The report stays in the browser. Inkling receives the question and selects a supported query. The dashed path shows where fine-tuning would fit if testing reveals a gap worth addressing.
+
 ## I built the ledger first
 
 I started with my own transaction history, realized gain and loss exports, and dated positions snapshots. Each file tells a different part of the story. Transactions record the activity and cash flows. Realized gain and loss detail shows the lots and basis the broker attributed to a disposal. A positions snapshot shows what was open and what it was marked at on a specific date.
