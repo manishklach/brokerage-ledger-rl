@@ -464,3 +464,24 @@ on PATH.
 ```bash
 python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --startup-timeout 1200 --output artifacts/inkling-2-mini/portfolio-route-low-effort.json
 ```
+
+### Inkling fine-tuning direction
+
+Use Inkling 2 Mini as the base for the next portfolio-routing SFT run.
+Keep stock Inkling as the primary baseline and retain Qwen scores for
+historical comparison. Use the same decoding settings for stock and
+fine-tuned Inkling and report exact routes, missed routes, and cutoffs.
+The existing 44 questions are a regression set. Add a fresh holdout before
+making a generalization claim.
+
+Prepare the synthetic training and evaluation splits as chat JSONL:
+
+```bash
+python prepare_inkling_sft.py --output artifacts/inkling-2-mini/sft-data
+```
+
+The exporter writes 264 training examples and 44 held-out questions
+without reading brokerage files. Keep the evaluation split out of model
+updates. NVIDIA's published NeMo AutoModel recipes use four GB200s, while
+SkyRL documents a Mini training configuration on eight B200s. The single
+B200 setup above is verified for inference. [NeMo AutoModel recipe](https://docs.nvidia.com/nemo/automodel/nightly/model-coverage/vision-language-models/thinkingmachines/Inkling-2-Mini) · [SkyRL recipe](https://docs.skyrl.ai/docs/models/inkling2)
