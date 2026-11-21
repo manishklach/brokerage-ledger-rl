@@ -608,3 +608,13 @@ The report adds exact scores by scenario, status-only accuracy, and false
 claims of support. The cases test opening evidence rules on synthetic data.
 A separate broker-backed holdout requires contracts that were kept out of the
 earlier experiments.
+
+Stock Inkling 2 Mini on a Runpod B200 scored **45/48** exact at low reasoning
+effort with a 512-token cap. It made zero false claims of support across the
+32 ambiguous or missing-evidence cases. All three misses were truncated.
+Those three cases scored **3/3** when retried at 1,024 tokens with the same
+reasoning setting. The retry covered only the truncated cases.
+
+Estimated GPU charges were $1.20 for the first startup attempt, $1.95 for the
+completed baseline, and $0.60 for the targeted retry. The temporary Pods
+were removed after use. Fine-tuning was deferred.
