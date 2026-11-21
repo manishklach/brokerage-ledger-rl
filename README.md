@@ -438,3 +438,29 @@ scored **38/44** exact. The new adapter fixed some individual routes
 but introduced others. All three confused at least one exposure ranking,
 bid/ask, and roll question. No brokerage records were uploaded for
 this run.
+
+### Inkling 2 Mini GPU baseline
+
+The same 44 synthetic routing questions also ran through stock
+[Inkling 2 Mini](https://thinkingmachines.ai/model-card/inkling-2-mini/) on
+a single Runpod B200 using the [vLLM model image](https://recipes.vllm.ai/thinkingmachines/Inkling-2-Mini).
+
+| Checkpoint and decoding | Exact routes | Length-truncated |
+| --- | ---: | ---: |
+| Qwen3-8B stock and both tested adapters, 80 tokens | 38/44 each | See the Qwen pilot scorecards |
+| Inkling 2 Mini, default effort and 80 tokens | 4/44 | 40/44 |
+| Inkling 2 Mini, low effort and 512 tokens | 41/44 | 0/44 |
+
+The rows use the same prompts and scorer. The token budgets and reasoning
+settings differ, so the higher score does not establish an equal-budget
+advantage. The low-effort run missed one expiration-window, one fund-overlap,
+and one partial-close question. This experiment used stock Inkling weights
+and did not include fine-tuning or any brokerage inputs.
+
+With an authenticated OpenAI-compatible vLLM server running, set
+PORTFOLIO_BENCHMARK_API_KEY in the environment. The client also needs curl
+on PATH.
+
+```bash
+python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --startup-timeout 1200 --output artifacts/inkling-2-mini/portfolio-route-low-effort.json
+```
