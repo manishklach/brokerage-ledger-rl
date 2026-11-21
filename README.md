@@ -1,11 +1,26 @@
 # Brokerage Ledger RL
 
-A local-first research project for reconciling Schwab options activity and
-post-training an open-weight model with verifiable rewards. A deterministic
-ledger handles quantities and cash. The model learns to identify supporting
-transaction rows and flag missing evidence. The project analyzes past trades.
+A local-first Schwab portfolio and options analysis project. A deterministic
+ledger reconciles broker lots, calculates portfolio figures, and cites
+transaction rows. The language model routes questions and identifies missing
+evidence. The workflow is read-only.
 
-## What we trained
+## Current model direction
+
+**Inkling 2 Mini is the base for the next portfolio-routing fine-tune.**
+Stock Inkling scored **41/44** on the synthetic routing holdout using one
+Runpod B200 with low reasoning effort and a 512-token cap. Qwen3-8B and its
+tested adapters each scored **38/44** with an 80-token cap. The different
+decoding budgets limit the comparison. See the [GPU benchmark](#inkling-2-mini-gpu-baseline)
+and [fine-tuning preparation](#inkling-fine-tuning-direction).
+
+The Inkling result is from inference. Fine-tuning is pending, with the
+synthetic training split prepared. The earlier Qwen results remain the
+reference for Schwab evidence, portfolio analysis, and tax-reporting evals.
+Brokerage CSVs and account-level outputs stay in the local Git-ignored
+`private/` directory.
+
+## What we trained with Qwen
 
 We post-trained Qwen3-8B on a Runpod NVIDIA RTX 4090 using custom synthetic
 brokerage examples. Supervised fine-tuning (SFT) trained a LoRA adapter.
