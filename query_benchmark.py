@@ -48,8 +48,6 @@ def build(cases):
         groups[row["contract"]].append(row)
     single = [rows[0] for rows in groups.values() if len(rows) == 1]
     repeated = [rows for rows in groups.values() if len(rows) > 1]
-    if len(single) < 18 or len(repeated) < 8:
-        raise ValueError("Need 18 unique contracts and eight contracts with repeated closes")
     result = []
 
     def add(question, matches, operation, close_id, preferred_month=None, *, month=None, source_line=None):
@@ -77,19 +75,23 @@ def build(cases):
         "Did we record enough opening quantity for the {option} I closed in {month}?",
         "Does the record support the opening allocation for the {month} close on my {option}?",
     ]
-    for index, row in enumerate(rng.sample(single, 18)):
+    for index, row in enumerate(rng.sample(single, min(18, len(single)))):
         question = patterns[index % len(patterns)].format(
             option=option_name(row["contract"]), month=row["month"], line=row["close_id"].split("-")[-1],
         )
         source = int(row["close_id"].split("-")[-1]) if index % len(patterns) == 3 else None
         add(question, [row], CHECK, row["close_id"], row["month"],
             month=None if source else row["month"], source_line=source)
-    for group in rng.sample(repeated, 8):
+    for group in rng.sample(repeated, min(8, len(repeated))):
         add(f"Can you check the opening evidence for the close on my {option_name(group[0]['contract'])}?",
             group, "clarify", None)
-    for row in rng.sample(single, 4):
-        add(f"Check whether my February 2026 close on the {option_name(row['contract'])} has opening evidence.",
-            [row], "no_match", None, row["month"], month="2026-02")
+    for row in rng.sample(single, min(4, len(single))):
+        year, month = map(int, row["month"].split("-"))
+        nearby = year * 12 + month - 1 + rng.choice((-3, -2, -1, 1, 2, 3))
+        missing_year, missing_month = divmod(nearby, 12)
+        absent = f"{missing_year:04d}-{missing_month + 1:02d}"
+        add(f"Check whether my {absent} close on the {option_name(row['contract'])} has opening evidence.",
+            [row], "no_match", None, row["month"], month=absent)
     rng.shuffle(result)
     return result
 

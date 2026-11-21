@@ -7,7 +7,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from ledger import cash_total, number, parse_date, read_export
-from reconcile import compare_realized_lots, contract, export_rows
+from option_lots import match_options
+from reconcile import compare_close_groups, contract, export_rows
 
 FIELDS = {
     "Symbol", "Closed Date", "Opened Date", "Quantity", "Proceeds", "Cost Basis (CB)",
@@ -59,7 +60,8 @@ def link_broker_lots(transactions, lots, first_effective):
             close = lot["close_evidence"]
             sides = OPEN_SIDE.get(close["actions"][0]) if close["status"] == "quantity_match" else None
             candidates = [row for row in rows if sides is None or row.action in sides]
-            status = "predates_export" if lot["opened"] < first_effective.isoformat() else "missing"
+            status = ("predates_export" if first_effective is not None
+                      and lot["opened"] < first_effective.isoformat() else "missing")
             if candidates:
                 required = sum(item["quantity"] for item in group)
                 available = sum(abs(row.quantity) for row in candidates)
@@ -108,18 +110,20 @@ def read_schwab_realized(realized_path, *, year=None):
 
 
 def review(transactions, realized_path, year):
-    return review_lots(transactions, read_schwab_realized(realized_path, year=year), year)
+    return review_lots(transactions, read_schwab_realized(realized_path), year)
 
 
 def review_lots(transactions, realized_lots, year):
     prefix = str(year)
-    first_posted = min(row.posted_date for row in transactions)
-    first_effective = min(row.effective_date for row in transactions)
-    last_posted = max(row.posted_date for row in transactions)
+    first_posted = min((row.posted_date.isoformat() for row in transactions), default=None)
+    first_effective = min((row.effective_date for row in transactions), default=None)
+    last_posted = max((row.posted_date.isoformat() for row in transactions), default=None)
     totals = defaultdict(lambda: defaultdict(Decimal))
     details = []
     issues = defaultdict(list)
+    comparison_lots = defaultdict(list)
     for lot in realized_lots:
+        comparison_lots[(lot.get("transaction_closed") or lot["closed"])[:7]].append(lot)
         if not lot["closed"].startswith(prefix + "-"):
             continue
         line = lot["broker_source_line"]
@@ -144,23 +148,31 @@ def review_lots(transactions, realized_lots, year):
             for field, amount in amounts.items():
                 totals[key][field] += amount
         details.append({
-            **lot, "opening_predates_transaction_export": lot["opened"] < first_effective.isoformat(),
+            **lot, "opening_predates_transaction_export": (
+                first_effective is not None and lot["opened"] < first_effective.isoformat()
+            ),
         })
 
     link_broker_lots(transactions, details, first_effective)
+    closes_by_month = defaultdict(list)
+    for close in match_options(transactions, None)["closes"]:
+        closes_by_month[close["effective_date"][:7]].append(close)
+    transactions_by_month = defaultdict(list)
+    for row in transactions:
+        transactions_by_month[row.posted_date.isoformat()[:7]].append(row)
     monthly = {}
     for month in range(1, 13):
         label = f"{prefix}-{month:02d}"
-        rows = [row for row in transactions if row.posted_date.isoformat().startswith(label)]
-        groups = compare_realized_lots(transactions, details, label)
+        rows = transactions_by_month[label]
+        groups = compare_close_groups(closes_by_month[label], comparison_lots[label], label)
         monthly[label] = {
             "transaction_rows": len(rows), "net_transaction_cash": cash_total(rows),
             "option_close_comparison": groups,
         }
     return {
         "year": year,
-        "source_scope": {"first_posted": first_posted.isoformat(), "last_posted": last_posted.isoformat(),
-                         "first_effective": first_effective.isoformat()},
+        "source_scope": {"first_posted": first_posted, "last_posted": last_posted,
+                         "first_effective": first_effective.isoformat() if first_effective else None},
         "broker_lots_by_term": Counter(row["term"] for row in details),
         "reported_wash_sale_lots": sum(row["wash_sale_flag"] for row in details),
         "lots_opened_before_export": sum(row["opening_predates_transaction_export"] for row in details),

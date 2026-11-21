@@ -10,7 +10,9 @@ from pathlib import Path
 from collections import Counter
 
 from broker_training_examples import make_examples
+from inkling_evidence_holdout import evidence_cases
 from portfolio_training import routing_cases, score_route
+from rewards import unique_fields
 
 
 def lot_holdout(path):
@@ -31,10 +33,11 @@ def lot_holdout(path):
 
 def score_lot(reply, case):
     try:
-        answer = json.loads(reply)
+        answer = json.loads(reply, object_pairs_hook=unique_fields)
     except ValueError:
         return False
-    if not isinstance(answer, dict) or answer.get("status") != case["expected_cash"]:
+    if (not isinstance(answer, dict) or set(answer) != {"status", "source_lines"}
+            or answer["status"] != case["expected_cash"]):
         return False
     lines = answer.get("source_lines")
     return (isinstance(lines, list) and all(type(line) is int for line in lines)
@@ -49,9 +52,13 @@ def main():
     parser.add_argument("--startup-timeout", type=int, default=900)
     parser.add_argument("--max-tokens", type=int, default=80)
     parser.add_argument("--reasoning-effort", choices=["none", "low", "medium", "high"])
-    parser.add_argument("--lot-holdout", type=Path)
+    dataset = parser.add_mutually_exclusive_group()
+    dataset.add_argument("--lot-holdout", type=Path)
+    dataset.add_argument("--fresh-evidence", action="store_true")
     args = parser.parse_args()
-    key = os.environ["PORTFOLIO_BENCHMARK_API_KEY"]
+    key = os.environ.get("PORTFOLIO_BENCHMARK_API_KEY")
+    if not key:
+        parser.error("Set PORTFOLIO_BENCHMARK_API_KEY to the model server API key")
 
     def request(path, payload=None):
         command = ["curl", "--silent", "--show-error", "--max-time", "90", "--config", "-",
@@ -60,9 +67,15 @@ def main():
             command.extend(("--data-binary", json.dumps(payload)))
         config = 'header = ' + json.dumps(f"Authorization: Bearer {key}") + '\n'
         config += 'header = "Content-Type: application/json"\n'
-        result = subprocess.run(command, input=config, capture_output=True, text=True, check=True)
-        body, _, status = result.stdout.rpartition("\n")
-        return int(status), body
+        for delay in (0, 1, 2):
+            if delay:
+                time.sleep(delay)
+            result = subprocess.run(command, input=config, capture_output=True, text=True)
+            body, _, status_text = result.stdout.rpartition("\n")
+            status = int(status_text) if result.returncode == 0 and status_text.isdigit() else 0
+            if status and status not in {408, 429, 500, 502, 503, 504}:
+                break
+        return status, body
 
     deadline = time.monotonic() + args.startup_timeout
     while True:
@@ -82,7 +95,13 @@ def main():
         time.sleep(5)
 
     print("Model server ready", flush=True)
-    cases = lot_holdout(args.lot_holdout) if args.lot_holdout else routing_cases("eval", 44)
+    if args.fresh_evidence:
+        cases = evidence_cases()
+    elif args.lot_holdout:
+        cases = lot_holdout(args.lot_holdout)
+    else:
+        cases = routing_cases("eval", 44)
+    evidence_eval = args.fresh_evidence or args.lot_holdout is not None
 
     def evaluate(case):
         payload = {
@@ -91,22 +110,31 @@ def main():
         }
         if args.reasoning_effort is not None:
             payload["reasoning_effort"] = args.reasoning_effort
-        status, body = request("/chat/completions", payload)
-        if status != 200:
-            raise RuntimeError(f"Completion request failed (HTTP {status}): {body[:200]}")
-        choice = json.loads(body)["choices"][0]
-        reply = choice["message"].get("content") or ""
-        correct = (score_lot(reply, case) if args.lot_holdout
+        started = time.perf_counter()
+        result = {"case_id": case.get("id"), "target": case["expected_cash"]}
+        try:
+            status, body = request("/chat/completions", payload)
+            if status != 200:
+                return {**result, "score": 0, "error": f"HTTP {status}"}
+            choice = json.loads(body)["choices"][0]
+            reply = choice["message"].get("content") or ""
+            if not isinstance(reply, str):
+                raise TypeError("Expected text completion")
+        except (subprocess.CalledProcessError, ValueError, TypeError, KeyError, IndexError, AttributeError):
+            return {**result, "score": 0, "error": "Invalid or unavailable completion"}
+        correct = (score_lot(reply, case) if evidence_eval
                    else score_route(reply, [], case["expected_cash"]))
-        return {"reply": reply, "target": case["expected_cash"], "finish_reason": choice["finish_reason"],
-                "score": int(correct)}
+        return {**result, "reply": reply, "finish_reason": choice.get("finish_reason"),
+                "score": int(correct), "elapsed_seconds": round(time.perf_counter() - started, 3)}
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         replies = list(pool.map(evaluate, cases))
     result = {"model": args.model, "correct": sum(row["score"] for row in replies),
               "total": len(replies), "max_tokens": args.max_tokens,
               "reasoning_effort": args.reasoning_effort, "replies": replies}
-    if args.lot_holdout:
+    result["failed_requests"] = sum("error" in row for row in replies)
+    result["truncated"] = sum(row.get("finish_reason") == "length" for row in replies)
+    if evidence_eval:
         totals = Counter(row["target"] for row in replies)
         correct_by_status = Counter(row["target"] for row in replies if row["score"])
         result["by_status"] = {label: {"correct": correct_by_status[label], "total": total}

@@ -13,7 +13,7 @@ from reconcile import contract
 
 def build(rows, report, month):
     opens = defaultdict(list)
-    closes = {item["close_line"]: item for item in match_options(rows, month)["closes"]}
+    closes = {item["close_line"]: item for item in match_options(rows, None)["closes"]}
     for row in rows:
         if row.action in {"Buy to Open", "Sell to Open"} and row.quantity:
             opens[contract(row.symbol)].append(row)

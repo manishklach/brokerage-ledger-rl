@@ -37,8 +37,8 @@ def evaluate(expected, actual):
 
 
 def build(rows, realized, month):
-    fifo = {row["close_line"]: row for row in match_options(rows, month)["closes"]}
-    lifo = {row["close_line"]: row for row in match_options(rows, month, newest_first=True)["closes"]}
+    fifo = {row["close_line"]: row for row in match_options(rows, None)["closes"]}
+    lifo = {row["close_line"]: row for row in match_options(rows, None, newest_first=True)["closes"]}
     history = defaultdict(list)
     for row in rows:
         symbol = contract(row.symbol)

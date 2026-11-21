@@ -47,26 +47,34 @@ def realized_comparison(transactions, path, month):
     lots = (
         {"instrument": contract(row["Symbol"]), "closed": parse_date(row["Closed Date"]).isoformat(),
          "broker_source_line": line, "opened": parse_date(row["Opened Date"]).isoformat(),
+         "transaction_closed": parse_date(row.get("Transaction Closed Date") or row["Closed Date"]).isoformat(),
          "quantity": abs(number(row["Quantity"])), "realized": number(row["Gain/Loss ($)"]),
          "wash_sale_flag": row["Wash Sale?"].strip().lower() == "yes"}
         for line, row in export_rows(path, required)
-        if contract(row["Symbol"]) and parse_date(row["Closed Date"]).isoformat().startswith(month + "-")
+        if contract(row["Symbol"])
     )
     return compare_realized_lots(transactions, lots, month)
 
 
 def compare_realized_lots(transactions, lots, month):
+    modeled = match_options(transactions, None)["closes"]
+    return compare_close_groups(modeled, lots, month)
+
+
+def compare_close_groups(closes, lots, month):
     modeled = defaultdict(list)
     broker = defaultdict(list)
     for lot in lots:
-        if lot["instrument"] and lot.get("is_option", True) and lot["closed"].startswith(month + "-"):
-            broker[lot["instrument"], lot["closed"]].append({
+        closed = lot.get("transaction_closed") or lot["closed"]
+        if lot["instrument"] and lot.get("is_option", True) and closed.startswith(month + "-"):
+            broker[lot["instrument"], closed].append({
                 "line": lot["broker_source_line"], "opened": lot["opened"],
                 "quantity": lot["quantity"], "pnl": lot["realized"],
                 "wash_sale": lot["wash_sale_flag"],
             })
-    for row in match_options(transactions, month)["closes"]:
-        modeled[contract(row["contract"]), row["effective_date"]].append(row)
+    for row in closes:
+        if row["effective_date"].startswith(month + "-"):
+            modeled[contract(row["contract"]), row["effective_date"]].append(row)
 
     items = []
     for (symbol, closed), ledger_rows in sorted(modeled.items()):
@@ -117,6 +125,7 @@ def compare_realized_lots(transactions, lots, month):
 def holdings_comparison(transactions, path, as_of):
     ledger_positions = defaultdict(Decimal)
     snapshot = defaultdict(Decimal)
+    issues = defaultdict(list)
     buy = {"Buy to Open", "Buy to Close", "Cancel Sell to Open"}
     sell = {"Sell to Open", "Sell to Close", "Cancel Buy to Open"}
     signed = {"Expired", "Assigned", "Exchange or Exercise", "Options Frwd Split", "Journal"}
@@ -127,20 +136,30 @@ def holdings_comparison(transactions, path, as_of):
         if symbol is None:
             continue
         if row.quantity is None:
-            raise ValueError(f"Missing option quantity at transaction line {row.source_line}")
-        if row.action in buy:
+            issues[symbol].append({"transaction_line": row.source_line, "reason": "missing_quantity"})
+        elif row.action in buy:
             ledger_positions[symbol] += abs(row.quantity)
         elif row.action in sell:
             ledger_positions[symbol] -= abs(row.quantity)
         elif row.action in signed:
             ledger_positions[symbol] += row.quantity
         else:
-            raise ValueError(f"Unsupported option action at transaction line {row.source_line}")
-    for _, row in export_rows(path, {"Symbol", "Qty (Quantity)"}):
+            issues[symbol].append({"transaction_line": row.source_line, "reason": "unsupported_action",
+                                   "action": row.action})
+    for line, row in export_rows(path, {"Symbol", "Qty (Quantity)"}):
         symbol = contract(row["Symbol"])
         if symbol:
-            snapshot[symbol] += number(row["Qty (Quantity)"])
+            try:
+                quantity = number(row["Qty (Quantity)"])
+            except (ValueError, ArithmeticError):
+                issues[symbol].append({"snapshot_line": line, "reason": "invalid_quantity"})
+                continue
+            if quantity is None:
+                issues[symbol].append({"snapshot_line": line, "reason": "missing_quantity"})
+            else:
+                snapshot[symbol] += quantity
     symbols = {symbol for positions in (ledger_positions, snapshot) for symbol, qty in positions.items() if qty}
+    symbols.difference_update(issues)
     differences = [
         {"contract": symbol, "ledger_quantity": ledger_positions[symbol], "snapshot_quantity": snapshot[symbol]}
         for symbol in sorted(symbols) if ledger_positions[symbol] != snapshot[symbol]
@@ -151,6 +170,7 @@ def holdings_comparison(transactions, path, as_of):
         "contracts_compared": len(symbols),
         "quantity_ties": len(symbols) - len(differences),
         "differences": differences,
+        "unresolved_contracts": dict(sorted(issues.items())),
     }
 
 

@@ -124,6 +124,7 @@ def holdings_review(rows, as_of, targets):
             "options": [r for r in target_options if r["underlying"] == root],
         } for root in targets},
         "concentration": {
+            "scope": "Gross absolute marks for shares and options, excluding cash",
             "target_gross_mark": target_gross, "gross_share_option_mark": gross,
             "target_share_percent": (target_gross * 100 / gross).quantize(Decimal("0.01")) if gross else None,
             "missing_marks": source_lines([r for r in securities if r["market_value"] is None]),
@@ -256,7 +257,7 @@ def main():
         "sources": {"transactions": args.transactions.name, "realized": args.realized.name,
                     "holdings": args.holdings.name},
         **build_portfolio_report(
-            read_export(args.transactions), read_schwab_realized(args.realized, year=period.year), positions,
+            read_export(args.transactions), read_schwab_realized(args.realized), positions,
             period, args.as_of, args.tickers, index,
         ),
     }

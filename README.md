@@ -7,16 +7,11 @@ Schwab is the first supported CSV integration. The workflow is read-only.
 
 ## Current model direction
 
-**Inkling 2 Mini is the base for the next portfolio-routing fine-tune.**
-Stock Inkling scored **41/44** on the synthetic routing holdout using one
-Runpod B200 with low reasoning effort and a 512-token cap. Qwen3-8B and its
-tested adapters each scored **38/44** with an 80-token cap. The different
-decoding budgets limit the comparison. See the [GPU benchmark](#inkling-2-mini-gpu-baseline)
-and [fine-tuning preparation](#inkling-fine-tuning-direction).
-
-The Inkling result is from inference. Fine-tuning is pending, with the
-synthetic training split prepared. The earlier Qwen results remain the
-reference for Schwab evidence, portfolio analysis, and tax-reporting evals.
+**Inkling 2 Mini is the model for the next evaluation.** Run stock Inkling on
+the [fresh evidence checks](#fresh-opening-evidence-checks) before choosing
+whether to fine-tune. Prior GPU experiments used different output budgets
+and are regression results under their recorded settings.
+See the [GPU benchmark](#inkling-2-mini-gpu-baseline).
 Brokerage CSVs and account-level outputs stay in the local Git-ignored
 `private/` directory.
 
@@ -359,6 +354,10 @@ brokerage data before scoring model answers.
 
 ## Packaging
 
+Install the standard-library ledger commands with `python -m pip install .`
+on Python 3.11 or newer. The training experiments have separate runtime
+requirements. Run the ledger tests with `python -m unittest discover`.
+
 Use a **source ZIP** for the current CLI prototype. The ledger and its tests
 run with Python 3.11+ and the standard library. Build the ZIP from a reviewed
 Git commit so recipients can reproduce the exact source version.
@@ -459,6 +458,17 @@ Generating the report requires no model training. The hosted workspace is
 private. The command above works independently of access to the workspace.
 
 ## Monthly portfolio review
+
+Monthly transaction counts and cash use the posted month. Option close
+comparisons instead use the transaction's effective date and the broker's
+Transaction Closed Date when supplied, falling back to Closed Date. Annual
+broker-reported totals still use Closed Date. A close at a month boundary
+can therefore appear under different months in these views.
+
+Unsupported option events affect provisional closes from their effective
+date forward. Subsequent inventory can remain unresolved after such an
+event. The holdings reconciliation compares option quantities and reports
+unresolved contracts separately, with source lines and reasons.
 
 Run the local workflow from the transaction, realized gain/loss, and dated
 positions exports. The optional evidence index supports the benchmark's
@@ -565,3 +575,17 @@ python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model th
 
 The prompts describe already-classified ledger evidence. This benchmark
 measures interpretation and citation accuracy for that evidence.
+
+### Fresh opening-evidence checks
+
+The six independently labeled synthetic cases cover cross-month partial
+allocations, exact multi-row allocations, insufficient quantity, and
+ambiguous lot elections. Keep these cases out of training. They are a
+targeted regression check with a small sample size.
+
+```bash
+python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --fresh-evidence --output private/inkling-fresh-evidence.json
+```
+
+The scorecard records exact matches by status, failed requests, truncation,
+and latency for completed requests.

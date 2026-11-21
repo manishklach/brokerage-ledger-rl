@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brokerage-ledger-rl"
+version = "0.1.0"
+description = "Local brokerage ledger and portfolio reconciliation"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[project.scripts]
+brokerage-ledger = "ledger:main"
+brokerage-reconcile = "reconcile:main"
+brokerage-period-review = "period_review:main"
+brokerage-portfolio-review = "portfolio_review:main"
+
+[tool.setuptools]
+py-modules = [
+    "close_filters",
+    "ledger",
+    "ledger_evidence",
+    "lot_pilot_data",
+    "option_lots",
+    "period_review",
+    "portfolio_review",
+    "reconcile",
+    "rewards",
+]

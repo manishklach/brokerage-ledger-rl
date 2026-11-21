@@ -8,3 +8,5 @@ artifacts/
 *.safetensors
 .env
 *.gguf
+/build/
+/*.egg-info/

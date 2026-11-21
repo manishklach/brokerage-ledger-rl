@@ -20,6 +20,9 @@ OPTION_ACTIONS = {
 
 
 def parse_date(value: str) -> date:
+    value = value.strip()
+    if "-" in value:
+        return date.fromisoformat(value)
     return datetime.strptime(value, "%m/%d/%Y").date()
 
 
@@ -27,6 +30,8 @@ def number(value: str) -> Decimal | None:
     value = value.strip().replace("$", "").replace(",", "")
     if not value:
         return None
+    if value.startswith("(") and value.endswith(")"):
+        value = "-" + value[1:-1].strip()
     result = Decimal(value)
     if not result.is_finite():
         raise ValueError("Expected a finite number")
@@ -51,8 +56,13 @@ def read_export(path: Path) -> list[Transaction]:
     transactions = []
     with path.open(encoding="utf-8-sig", newline="") as source:
         reader = csv.reader(source, strict=True)
-        if tuple(next(reader, ())) != HEADERS:
-            raise ValueError("Unexpected Schwab export headers")
+        for row in reader:
+            header = [cell.strip() for cell in row]
+            if len(header) == len(set(header)) and set(HEADERS) <= set(header):
+                columns = [header.index(name) for name in HEADERS]
+                break
+        else:
+            raise ValueError("Missing or duplicate Schwab transaction header columns")
         while True:
             line = reader.line_num + 1
             row = next(reader, None)
@@ -60,8 +70,9 @@ def read_export(path: Path) -> list[Transaction]:
                 break
             if not row or not any(cell.strip() for cell in row):
                 continue
-            if len(row) != len(HEADERS):
-                raise ValueError(f"Line {line}: expected eight columns")
+            if len(row) != len(header):
+                raise ValueError(f"Line {line}: expected {len(header)} columns")
+            row = [row[column] for column in columns]
             posted, _, effective = row[0].strip().partition(" as of ")
             try:
                 transactions.append(Transaction(

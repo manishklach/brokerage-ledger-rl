@@ -11,7 +11,6 @@ from pathlib import Path
 from ledger import OPTION_ACTIONS, Transaction, read_export
 
 CENT = Decimal("0.01")
-RETROACTIVE = {"Cancel Buy to Open", "Cancel Sell to Open", "Options Frwd Split"}
 
 
 @dataclass
@@ -28,7 +27,7 @@ def allocate(amount: Decimal, quantity: Decimal, before: Decimal, after: Decimal
     return through(after) - through(before)
 
 
-def match_options(rows: list[Transaction], month: str, *, newest_first: bool = False) -> dict:
+def match_options(rows: list[Transaction], month: str | None, *, newest_first: bool = False) -> dict:
     contracts = defaultdict(list)
     for row in rows:
         if len(row.symbol.split()) == 4 and row.symbol.split()[-1] in {"C", "P"}:
@@ -38,12 +37,11 @@ def match_options(rows: list[Transaction], month: str, *, newest_first: bool = F
     other_events = []
     for symbol, events in contracts.items():
         lots = {"buy": deque(), "sell": deque()}
-        blockers = [row.source_line for row in events if row.action in RETROACTIVE]
+        blockers = []
         for row in sorted(events, key=lambda x: (x.effective_date, -x.source_line)):
-            in_month = row.posted_date.isoformat().startswith(month + "-")
+            in_month = month is None or row.posted_date.isoformat().startswith(month + "-")
             if row.action not in OPTION_ACTIONS:
-                if row.action not in RETROACTIVE:
-                    blockers.append(row.source_line)
+                blockers.append(row.source_line)
                 if in_month:
                     other_events.append({"line": row.source_line, "action": row.action, "contract": symbol})
                 continue
