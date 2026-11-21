@@ -430,6 +430,34 @@ format and test whether the model can cite provided evidence labels.
 The result does not measure retrieval from raw brokerage records or
 accuracy on new question formats.
 
+## Generate a report for the query UI
+
+1. Export **Transaction History**, **Realized Gain/Loss Detail**, and a dated
+   **Positions** snapshot from Schwab for the same account. Save them locally
+   as `private/transactions.csv`, `private/realized.csv`, and
+   `private/holdings.csv`. Transaction history can cover earlier periods to
+   help link opening trades.
+2. From the repo root, run this with Python 3.11 or later. Replace the month
+   with the realized period you want and the date with the date on your
+   holdings export.
+
+   ```powershell
+   python portfolio_review.py private/transactions.csv private/realized.csv private/holdings.csv --month 2025-12 --as-of 2025-12-31 --output private/portfolio-report.json
+   ```
+
+3. In the query workspace, select **Load portfolio report** and open
+   `private/portfolio-report.json`. Pick one of the ten examples and select
+   **Run query**. These shortcuts read the answers computed by the ledger.
+4. For free-form questions, select **Inkling connection** and enter the HTTPS
+   base URL ending in `/v1` for a running OpenAI-compatible Inkling 2 Mini
+   server. Use an API key if the server requires one. The server must allow
+   requests from the site's origin. Inkling routes the question to a
+   supported report query while the JSON stays in the browser.
+
+The JSON comes from the CSVs and can be regenerated whenever they change.
+Generating the report requires no model training. The hosted workspace is
+private. The command above works independently of access to the workspace.
+
 ## Monthly portfolio review
 
 Run the local workflow from the transaction, realized gain/loss, and dated
