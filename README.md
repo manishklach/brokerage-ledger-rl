@@ -618,3 +618,27 @@ reasoning setting. The retry covered only the truncated cases.
 Estimated GPU charges were $1.20 for the first startup attempt, $1.95 for the
 completed baseline, and $0.60 for the targeted retry. The temporary Pods
 were removed after use. Fine-tuning was deferred.
+
+### H100 vLLM smoke test
+
+A single Runpod H100 SXM served stock Inkling 2 Mini and returned the correct
+status and citations on one synthetic case. The release-day image failed
+at an Inkling CUDA kernel on our H100. The older generic nightly used as the
+base below needed the Mini model registration and an updated Transformers
+dependency. The combination below passed a live request. Full H100
+benchmark coverage remains unmeasured.
+
+Use CUDA 13.2 or later on the host. The tested Linux amd64 base image was
+`vllm/vllm-openai@sha256:3dfcb2ba18f41fce7400d643e52210a6c4f198019ead77146e9fb649ee600ceb`.
+Override the container entrypoint to run Bash and use this startup command.
+Set `VLLM_API_KEY` in the runtime environment and expose port 8000 for a
+temporary test.
+
+```bash
+uv pip install --system --no-deps \
+  'https://wheels.vllm.ai/ab18334a4f60da74db7de89fe95594e5ed0cda36/vllm-0.34.0rc1.dev1125%2Bgab18334a4-cp38-abi3-manylinux_2_28_x86_64.whl' \
+  'transformers==5.24.0' &&
+exec vllm serve thinkingmachines/Inkling-2-Mini \
+  --host 0.0.0.0 --port 8000 --reasoning-parser inkling \
+  --max-model-len 4096 --max-num-seqs 2 --enforce-eager
+```
