@@ -60,6 +60,7 @@ def main():
     dataset.add_argument("--lot-holdout", type=Path)
     dataset.add_argument("--fresh-evidence", action="store_true")
     dataset.add_argument("--expanded-evidence", action="store_true")
+    dataset.add_argument("--broker-evidence", type=Path, help="Frozen broker-backed case file")
     args = parser.parse_args()
     key = os.environ.get("PORTFOLIO_BENCHMARK_API_KEY")
     if not key:
@@ -100,7 +101,12 @@ def main():
         time.sleep(5)
 
     print("Model server ready", flush=True)
-    if args.expanded_evidence:
+    if args.broker_evidence:
+        cases = [
+            {**case, "expected_cash": case["expected_status"]}
+            for case in json.loads(args.broker_evidence.read_text(encoding="utf-8"))
+        ]
+    elif args.expanded_evidence:
         cases = expanded_evidence_cases()
     elif args.fresh_evidence:
         cases = evidence_cases()
@@ -108,7 +114,7 @@ def main():
         cases = lot_holdout(args.lot_holdout)
     else:
         cases = routing_cases("eval", 44)
-    evidence_eval = args.expanded_evidence or args.fresh_evidence or args.lot_holdout is not None
+    evidence_eval = any((args.broker_evidence, args.expanded_evidence, args.fresh_evidence, args.lot_holdout))
 
     def evaluate(case):
         payload = {
@@ -151,13 +157,19 @@ def main():
         correct = Counter(case["scenario"] for case, row in zip(cases, replies, strict=True) if row["score"])
         result["by_scenario"] = {name: {"correct": correct[name], "total": total}
                                  for name, total in sorted(totals.items())}
-        result["status_correct"] = sum(
-            lot_answer(row.get("reply", "")).get("status") == row["target"] for row in replies
-        )
+    if args.expanded_evidence or args.broker_evidence:
+        predictions = [lot_answer(row.get("reply", "")).get("status") for row in replies]
+        targets = [row["target"] for row in replies]
+        recalled = Counter(target for target, guess in zip(targets, predictions, strict=True) if target == guess)
+        counts = Counter(targets)
+        result["status_correct"] = sum(recalled.values())
+        result["status_recall"] = {status: recalled[status] / total for status, total in counts.items()}
         result["false_supports"] = sum(
-            row["target"] != "supported" and lot_answer(row.get("reply", "")).get("status") == "supported"
-            for row in replies
+            target != "supported" and guess == "supported"
+            for target, guess in zip(targets, predictions, strict=True)
         )
+        unsupported = len(targets) - counts["supported"]
+        result["false_support_rate"] = result["false_supports"] / unsupported if unsupported else None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(f"{result['correct']}/{result['total']}", flush=True)

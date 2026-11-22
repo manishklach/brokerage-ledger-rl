@@ -591,6 +591,27 @@ claims of support. The cases test opening evidence rules on synthetic data.
 A separate broker-backed holdout requires contracts that were kept out of the
 earlier experiments.
 
+### Freeze a broker-backed test set
+
+`freeze_broker_holdout.py` builds a local opening-evidence test set for
+specified months. Supply the realized exports and case indexes used in
+prior experiments as exclusions. The builder also excludes contracts in
+other realized months in the source export and contracts with settlement
+events, since this scorer does not reconstruct settlement-adjusted
+inventory. It prints coverage counts and a SHA-256 digest and refuses to
+overwrite a frozen file.
+
+```bash
+python freeze_broker_holdout.py private/transactions.csv private/realized.csv --months 2026-05 2026-06 --exclude-realized private/prior-realized.csv --exclude-cases private/hard-lot-holdout.json --output private/inkling-broker-holdout-v1.json
+python evaluate_portfolio_server.py --base-url http://127.0.0.1:8000/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 1024 --broker-evidence private/inkling-broker-holdout-v1.json --output private/inkling-broker-baseline.json
+```
+
+Keep the frozen test cases out of training, prompt selection, and checkpoint
+selection. Inspect per-status recall, the false-support rate among
+unsupported cases, and failed or truncated requests. The score measures
+opening-evidence classification under the documented rule. It does not
+measure lot elections, settlement attribution, or live Web UI routing.
+
 Stock Inkling 2 Mini on a Runpod B200 scored **45/48** exact at low reasoning
 effort with a 512-token cap. It made zero false claims of support across the
 32 ambiguous or missing-evidence cases. All three misses were truncated.
