@@ -465,10 +465,16 @@ Transaction Closed Date when supplied, falling back to Closed Date. Annual
 broker-reported totals still use Closed Date. A close at a month boundary
 can therefore appear under different months in these views.
 
+The standalone `option_lots.py` CLI uses the effective month by default.
+Use `--date-basis posted` to reproduce the previous posted-month view.
+
 Unsupported option events affect provisional closes from their effective
-date forward. Subsequent inventory can remain unresolved after such an
-event. The holdings reconciliation compares option quantities and reports
-unresolved contracts separately, with source lines and reasons.
+date forward. The matcher scopes a blocker to the long or short inventory
+when the action identifies the affected side. A signed expiration,
+assignment, or exercise can remove all known remaining lots on a side
+when its quantity ties and that side has no prior blockers. Partial
+settlements or earlier uncertainty still require review. The holdings
+reconciliation reports unresolved contracts with source lines and reasons.
 
 Run the local workflow from the transaction, realized gain/loss, and dated
 positions exports. The optional evidence index supports the benchmark's

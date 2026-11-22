@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -45,3 +46,37 @@ class OptionLotTests(unittest.TestCase):
         result, = match_options(rows, "2026-10")["closes"]
         self.assertEqual(result["unmatched_quantity"], "1")
         self.assertIsNone(result["provisional_pnl"])
+
+    def test_full_assignment_leaves_clean_inventory_for_later_round_trip(self):
+        day = date(2026, 10, 1)
+        rows = [
+            self.row(5, day, "Sell to Open", 2, "80"),
+            self.row(4, day, "Assigned", 2, "0"),
+            self.row(3, day, "Sell to Open", 1, "20"),
+            self.row(2, day, "Buy to Close", 1, "-13"),
+        ]
+        close, = match_options(rows, "2026-10")["closes"]
+        self.assertEqual(close["provisional_pnl"], "7.00")
+        self.assertEqual(close["matches"][0]["open_line"], 3)
+
+    def test_partial_assignment_blocks_only_affected_side(self):
+        day = date(2026, 10, 1)
+        rows = [
+            self.row(8, day, "Sell to Open", 2, "80"),
+            self.row(7, day, "Assigned", 1, "0"),
+            self.row(6, day, "Buy to Open", 1, "-10"),
+            self.row(5, day, "Buy to Close", 1, "-13"),
+            self.row(4, day, "Sell to Close", 1, "15"),
+        ]
+        long_close, short_close = match_options(rows, "2026-10")["closes"]
+        self.assertEqual(long_close["provisional_pnl"], "5.00")
+        self.assertEqual(short_close["blocking_lines"], [7])
+
+    def test_reports_both_month_bases(self):
+        day = date(2026, 9, 30)
+        close = replace(self.row(2, day, "Sell to Close", 1, "15"), posted_date=date(2026, 10, 1))
+        rows = [close, self.row(3, day, "Buy to Open", 1, "-10")]
+        self.assertEqual(len(match_options(rows, "2026-10")["closes"]), 1)
+        self.assertEqual(match_options(rows, "2026-10", date_basis="effective")["closes"], [])
+        result, = match_options(rows, "2026-09", date_basis="effective")["closes"]
+        self.assertEqual(result["provisional_pnl"], "5.00")

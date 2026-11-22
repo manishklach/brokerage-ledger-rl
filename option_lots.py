@@ -11,6 +11,8 @@ from pathlib import Path
 from ledger import OPTION_ACTIONS, Transaction, read_export
 
 CENT = Decimal("0.01")
+CANCELLATION_SIDE = {"Cancel Buy to Open": "buy", "Cancel Sell to Open": "sell"}
+SETTLEMENT_ACTIONS = {"Expired", "Assigned", "Exchange or Exercise"}
 
 
 @dataclass
@@ -27,7 +29,10 @@ def allocate(amount: Decimal, quantity: Decimal, before: Decimal, after: Decimal
     return through(after) - through(before)
 
 
-def match_options(rows: list[Transaction], month: str | None, *, newest_first: bool = False) -> dict:
+def match_options(rows: list[Transaction], month: str | None, *, newest_first: bool = False,
+                  date_basis: str = "posted") -> dict:
+    if date_basis not in {"posted", "effective"}:
+        raise ValueError("date_basis must be posted or effective")
     contracts = defaultdict(list)
     for row in rows:
         if len(row.symbol.split()) == 4 and row.symbol.split()[-1] in {"C", "P"}:
@@ -37,20 +42,34 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
     other_events = []
     for symbol, events in contracts.items():
         lots = {"buy": deque(), "sell": deque()}
-        blockers = []
+        blockers = {"buy": [], "sell": []}
         for row in sorted(events, key=lambda x: (x.effective_date, -x.source_line)):
-            in_month = month is None or row.posted_date.isoformat().startswith(month + "-")
+            report_date = row.effective_date if date_basis == "effective" else row.posted_date
+            in_month = month is None or report_date.isoformat()[:7] == month
             if row.action not in OPTION_ACTIONS:
-                blockers.append(row.source_line)
+                if row.action in SETTLEMENT_ACTIONS and row.quantity:
+                    affected_side = "buy" if row.quantity < 0 else "sell"
+                    queue = lots[affected_side]
+                    remaining = sum(abs(lot.row.quantity) - lot.used for lot in queue)
+                    if not blockers[affected_side] and abs(row.quantity) == remaining:
+                        queue.clear()
+                    else:
+                        blockers[affected_side].append(row.source_line)
+                else:
+                    affected = (CANCELLATION_SIDE[row.action],) if row.action in CANCELLATION_SIDE else blockers
+                    for affected_side in affected:
+                        blockers[affected_side].append(row.source_line)
                 if in_month:
                     other_events.append({"line": row.source_line, "action": row.action, "contract": symbol})
                 continue
 
             phase, side = OPTION_ACTIONS[row.action]
+            inventory_side = side if phase == "open" else ("buy" if side == "sell" else "sell")
+            inventory_blockers = blockers[inventory_side]
             if not row.quantity or row.amount is None:
-                blockers.append(row.source_line)
+                inventory_blockers.append(row.source_line)
             if phase == "open":
-                if not blockers:
+                if not inventory_blockers:
                     lots[side].append(Lot(row))
                 continue
 
@@ -63,12 +82,12 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
                 "matches": [],
                 "provisional_pnl": None,
             }
-            if blockers:
-                result.update(status="unsupported_contract_event", blocking_lines=sorted(set(blockers)))
+            if inventory_blockers:
+                result.update(status="unsupported_contract_event", blocking_lines=sorted(set(inventory_blockers)))
             else:
                 quantity = abs(row.quantity)
                 remaining = quantity
-                queue = lots["buy" if side == "sell" else "sell"]
+                queue = lots[inventory_side]
                 pnl = Decimal("0.00")
                 while remaining and queue:
                     lot = queue[-1] if newest_first else queue[0]
@@ -104,6 +123,7 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
     closes.sort(key=lambda x: x["close_line"])
     return {
         "month": month,
+        "date_basis": date_basis,
         "assumptions": [
             "One account, export starts with zero known inventory",
             ("LIFO" if newest_first else "FIFO") + " by effective date; reverse CSV row order breaks ties",
@@ -120,13 +140,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv", type=Path)
     parser.add_argument("--month", required=True)
+    parser.add_argument("--date-basis", choices=("effective", "posted"), default="effective")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
         month = date.fromisoformat(args.month + "-01").isoformat()[:7]
     except ValueError:
         parser.error("--month must be YYYY-MM")
-    report = match_options(read_export(args.csv), month)
+    report = match_options(read_export(args.csv), month, date_basis=args.date_basis)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
