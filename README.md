@@ -7,11 +7,31 @@ Schwab is the first supported CSV integration. The workflow is read-only.
 
 The project is licensed under [Apache 2.0](LICENSE).
 
+## What’s available in v0.2.0
+
+- Run the ledger locally to reconcile option lots, check a holdings snapshot,
+  and generate a portfolio report with source row references. Schwab is the
+  first CSV integration, and the analysis API accepts normalized broker records.
+- Load the report into the private query workspace. Ten examples work
+  immediately with the sample portfolio or your own report. Results display
+  readable values, missing inputs, and expandable evidence.
+- Free-form questions need an Inkling 2 Mini endpoint. The model selects
+  one of the supported report queries. The report stays in the browser.
+  The managed connection is pending live endpoint setup.
+- Stock Inkling scored 45/48 on the expanded synthetic evidence holdout.
+  All three truncated cases passed when retried at a higher token cap.
+  A pinned vLLM configuration also passed one synthetic query on H100.
+
+[Get started with a portfolio report](#generate-a-report-for-the-query-ui) ·
+[Read the project write-up](BLOG.md) ·
+[Download v0.2.0](https://github.com/manishklach/brokerage-ledger-rl/releases/tag/v0.2.0)
+
 ## Current model direction
 
-**Inkling 2 Mini is the model for the next evaluation.** Run stock Inkling on
-the [fresh evidence checks](#fresh-opening-evidence-checks) before choosing
-whether to fine-tune. Prior GPU experiments used different output budgets
+**Inkling 2 Mini is the current model for evaluation.** The
+[expanded evidence holdout](#expanded-inkling-holdout) and targeted retry
+support deferring fine-tuning while we improve query handling and collect
+unseen broker-backed cases. Prior GPU experiments used different output budgets
 and are regression results under their recorded settings.
 See the [GPU benchmark](#inkling-2-mini-gpu-baseline).
 Brokerage CSVs and account-level outputs stay in the local Git-ignored
@@ -175,7 +195,7 @@ LoRA adapters. These were the results on the synthetic lot-evidence pilot:
 
 Supervised tuning led this pilot overall. GRPO detected more missing evidence
 but rejected more supported cases. These results measure the synthetic task.
-The project keeps Qwen3.8-27B as a possible scale-up after private validation.
+This command reproduces the historical Qwen training pilot.
 
 ## Evaluate locally against broker evidence
 
@@ -448,7 +468,8 @@ accuracy on new question formats.
 
 3. In the query workspace, select **Load portfolio report** and open
    `private/portfolio-report.json`. Pick one of the ten examples and select
-   **Run query**. These shortcuts read the answers computed by the ledger.
+   **Run query**. The workspace displays the computed answer as readable
+   text with expandable source evidence.
 4. For free-form questions, select **Inkling connection** and enter the HTTPS
    base URL ending in `/v1` for a running OpenAI-compatible Inkling 2 Mini
    server. Use an API key if the server requires one. The server must allow
