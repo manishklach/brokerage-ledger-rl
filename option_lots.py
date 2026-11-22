@@ -3,7 +3,7 @@
 import argparse
 import json
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -19,6 +19,7 @@ SETTLEMENT_ACTIONS = {"Expired", "Assigned", "Exchange or Exercise"}
 class Lot:
     row: Transaction
     used: Decimal = Decimal(0)
+    settlement_lines: list[int] = field(default_factory=list)
 
 
 def allocate(amount: Decimal, quantity: Decimal, before: Decimal, after: Decimal) -> Decimal:
@@ -30,7 +31,7 @@ def allocate(amount: Decimal, quantity: Decimal, before: Decimal, after: Decimal
 
 
 def match_options(rows: list[Transaction], month: str | None, *, newest_first: bool = False,
-                  date_basis: str = "posted") -> dict:
+                  date_basis: str = "effective") -> dict:
     if date_basis not in {"posted", "effective"}:
         raise ValueError("date_basis must be posted or effective")
     contracts = defaultdict(list)
@@ -50,9 +51,14 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
                 if row.action in SETTLEMENT_ACTIONS and row.quantity:
                     affected_side = "buy" if row.quantity < 0 else "sell"
                     queue = lots[affected_side]
+                    quantity = abs(row.quantity)
                     remaining = sum(abs(lot.row.quantity) - lot.used for lot in queue)
-                    if not blockers[affected_side] and abs(row.quantity) == remaining:
+                    if not blockers[affected_side] and quantity == remaining:
                         queue.clear()
+                    elif not blockers[affected_side] and len(queue) == 1 and quantity < remaining:
+                        lot = queue[0]
+                        lot.used += quantity
+                        lot.settlement_lines.append(row.source_line)
                     else:
                         blockers[affected_side].append(row.source_line)
                 else:
@@ -105,6 +111,8 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
                         "pnl": str(open_cash + close_cash),
                         "same_effective_date": opening.effective_date == row.effective_date,
                     })
+                    if lot.settlement_lines:
+                        result["matches"][-1]["prior_settlement_lines"] = list(lot.settlement_lines)
                     pnl += open_cash + close_cash
                     remaining -= matched
                     lot.used += matched

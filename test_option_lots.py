@@ -63,6 +63,7 @@ class OptionLotTests(unittest.TestCase):
         day = date(2026, 10, 1)
         rows = [
             self.row(8, day, "Sell to Open", 2, "80"),
+            self.row(9, day, "Sell to Open", 1, "30"),
             self.row(7, day, "Assigned", 1, "0"),
             self.row(6, day, "Buy to Open", 1, "-10"),
             self.row(5, day, "Buy to Close", 1, "-13"),
@@ -72,11 +73,25 @@ class OptionLotTests(unittest.TestCase):
         self.assertEqual(long_close["provisional_pnl"], "5.00")
         self.assertEqual(short_close["blocking_lines"], [7])
 
+    def test_partial_assignment_consumes_unambiguous_lot_with_exact_remainder(self):
+        day = date(2026, 10, 1)
+        rows = [
+            self.row(4, day, "Sell to Open", 3, "10"),
+            self.row(3, day, "Assigned", 1, "0"),
+            self.row(2, day, "Buy to Close", 2, "-5"),
+        ]
+        for newest_first in (False, True):
+            close, = match_options(rows, "2026-10", newest_first=newest_first)["closes"]
+            match, = close["matches"]
+            self.assertEqual(match["open_cash"], "6.67")
+            self.assertEqual(match["prior_settlement_lines"], [3])
+            self.assertEqual(close["provisional_pnl"], "1.67")
+
     def test_reports_both_month_bases(self):
         day = date(2026, 9, 30)
         close = replace(self.row(2, day, "Sell to Close", 1, "15"), posted_date=date(2026, 10, 1))
         rows = [close, self.row(3, day, "Buy to Open", 1, "-10")]
-        self.assertEqual(len(match_options(rows, "2026-10")["closes"]), 1)
-        self.assertEqual(match_options(rows, "2026-10", date_basis="effective")["closes"], [])
-        result, = match_options(rows, "2026-09", date_basis="effective")["closes"]
+        self.assertEqual(len(match_options(rows, "2026-10", date_basis="posted")["closes"]), 1)
+        self.assertEqual(match_options(rows, "2026-10")["closes"], [])
+        result, = match_options(rows, "2026-09")["closes"]
         self.assertEqual(result["provisional_pnl"], "5.00")
