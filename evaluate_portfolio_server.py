@@ -61,6 +61,7 @@ def main():
     dataset.add_argument("--fresh-evidence", action="store_true")
     dataset.add_argument("--expanded-evidence", action="store_true")
     dataset.add_argument("--broker-evidence", type=Path, help="Frozen broker-backed case file")
+    dataset.add_argument("--lot-validation", type=Path, help="Independent lot SFT validation cases")
     args = parser.parse_args()
     key = os.environ.get("PORTFOLIO_BENCHMARK_API_KEY")
     if not key:
@@ -101,7 +102,9 @@ def main():
         time.sleep(5)
 
     print("Model server ready", flush=True)
-    if args.broker_evidence:
+    if args.lot_validation:
+        cases = json.loads(args.lot_validation.read_text(encoding="utf-8"))
+    elif args.broker_evidence:
         cases = [
             {**case, "expected_cash": case["expected_status"]}
             for case in json.loads(args.broker_evidence.read_text(encoding="utf-8"))
@@ -114,7 +117,7 @@ def main():
         cases = lot_holdout(args.lot_holdout)
     else:
         cases = routing_cases("eval", 44)
-    evidence_eval = any((args.broker_evidence, args.expanded_evidence, args.fresh_evidence, args.lot_holdout))
+    evidence_eval = any((args.broker_evidence, args.expanded_evidence, args.fresh_evidence, args.lot_holdout, args.lot_validation))
 
     def evaluate(case):
         payload = {
@@ -152,7 +155,7 @@ def main():
         correct_by_status = Counter(row["target"] for row in replies if row["score"])
         result["by_status"] = {label: {"correct": correct_by_status[label], "total": total}
                                for label, total in sorted(totals.items())}
-    if args.expanded_evidence:
+    if args.expanded_evidence or args.lot_validation:
         totals = Counter(case["scenario"] for case in cases)
         correct = Counter(case["scenario"] for case, row in zip(cases, replies, strict=True) if row["score"])
         result["by_scenario"] = {name: {"correct": correct[name], "total": total}
