@@ -1,865 +1,124 @@
 # Brokerage Ledger RL
 
-A local-first toolkit for brokerage portfolio and options analysis. A deterministic
-ledger reconciles broker-reported lots, calculates portfolio figures, and cites
-source rows. The language model routes questions and identifies missing evidence.
-The workflow is read-only.
-
-The project is licensed under [Apache 2.0](LICENSE).
-
-## What’s available in v0.4.0
-
-- Run the ledger locally to reconcile option lots, check a holdings snapshot,
-  and generate a portfolio report with source row references. The
-  analysis API accepts normalized broker records.
-- Load the report into the private query workspace. Ten examples work
-  immediately with the sample portfolio or your own report. Results display
-  readable values, missing inputs, and expandable evidence.
-- Hosted Inkling 2 Mini handles questions about multiple tickers and metrics
-  in one request. The browser calculates realized P&L, snapshot unrealized
-  P&L, and recorded dividends from the private report.
-- The hosted planner passed a cold-start test on an on-demand NVIDIA L4
-  using a synthetic report. Cold starts can take several minutes, and
-  earlier attempts returned timeouts or HTTP 502.
-- A single 96 GB RTX PRO 6000 ran the Inkling lot-evidence LoRA pilot and
-  resumed from its first checkpoint. Step 12 ranked first on held-out
-  answer-token loss. The paired generation benchmark is still incomplete.
-- Stock Inkling scored 45/48 on the expanded synthetic evidence holdout.
-  All three truncated cases passed when retried at a higher token cap.
-  A pinned vLLM configuration also passed one synthetic query on H100.
-
-[Get started with a portfolio report](#generate-a-report-for-the-query-ui) ·
-[Read the project write-up](BLOG.md) · [Read Part 2](BLOG_PART_2.md) ·
-[Download v0.4.0](https://github.com/manishklach/brokerage-ledger-rl/releases/tag/v0.4.0)
-
-## Current model direction
-
-**Inkling 2 Mini is the current model for evaluation.** The
-[expanded evidence holdout](#expanded-inkling-holdout) and targeted retry
-support deferring fine-tuning while we improve query handling and collect
-unseen broker-backed cases. Prior GPU experiments used different output budgets
-and are regression results under their recorded settings.
-See the [GPU benchmark](#inkling-2-mini-gpu-baseline).
-Brokerage CSVs and account-level outputs stay in the local Git-ignored
-`private/` directory.
-
-## What we trained with Qwen
-
-We post-trained Qwen3-8B on a Runpod NVIDIA RTX 4090 using custom synthetic
-brokerage examples. Supervised fine-tuning (SFT) trained a LoRA adapter.
-Follow-up Group Relative Policy Optimization (GRPO) runs tested executable
-rewards. The early runs used synthetic data only. A later SFT run used
-redacted examples derived from the 2025 Schwab reconciliation. The raw
-exports stayed local.
-
-The checkpoint is a specialized Qwen3-8B variant made from the original base
-model and its matching LoRA adapter. SFT and GRPO are both forms of
-post-training. The benchmark results do not establish state-of-the-art
-performance.
-
-| Evaluation | Result | Scope |
-| --- | --- | --- |
-| October opening evidence | Stock 32/53, supervised 53/53 | Exact status and supporting row IDs |
-| Redacted 2025 broker-link holdout | Stock 0/54, previous SFT 11/54, new SFT 54/54 | Exact status and aliases on held-out contracts with the same prompt format |
-| Harder private holdout | Supervised 140/196 | Opening evidence across additional months |
-| Ledger-controlled close routing | Stock and supervised both 26/30 | Filter extraction over a 196-case local index |
-| Portfolio, position, and tax questions | Supervised 27/40 rubric points | Answer synthesis from prepared evidence. Tax amounts were unavailable. |
-
-SFT produced the clearest gains. RL sometimes improved detection of missing
-evidence but made the model reject more supported cases. This is a small
-version of Applied Compute's workflow of adapting a base model and measuring
-it on a domain task. AC2 also manages enterprise serving and ongoing model
-improvement. [Applied Compute's AC2 overview](https://www.appliedcompute.com/platform/introducing-ac2)
-
-## What the project does
-
-1. Normalize one account's transaction export, keeping source row
-   numbers, posted dates, effective dates, quantities, reported amounts, and
-   fees.
-2. Audit transaction cash and propose vertical spread pairings for review.
-3. Reconstruct provisional option lots, then compare opening-date allocations,
-   quantities, and realized P&L with broker-reported closed-lot detail. Compare signed
-   position quantities with a separate holdings snapshot.
-4. Post-train Qwen3-8B on synthetic cases using supervised fine-tuning (SFT) and
-   Group Relative Policy Optimization (GRPO). A Python verifier scores exact
-   source row IDs and, depending on the task, cash or evidence status.
-5. Evaluate checkpoints on the same held-out inputs. Synthetic evaluation can
-   run on a GPU Pod. Broker-derived prompts and labels stay local.
-
-## Run the local workflow
-
-Ledger and report commands use Python 3.11+ and the standard library. Put
-exports under the Git-ignored `private/` folder or use absolute paths to the
-original files. The example uses October 2026. Adjust the reporting month and
-snapshot date to match your inputs.
-
-```powershell
-python ledger.py private/transactions.csv --output private/audit.json
-python option_lots.py private/transactions.csv --month 2026-10 --output private/october-option-lots.json
-python reconcile.py private/transactions.csv private/realized.csv private/holdings.csv --month 2026-10 --as-of 2026-11-19 --output private/schwab-reconciliation.json
-python lot_eval.py private/transactions.csv private/schwab-reconciliation.json --month 2026-10 --output private/october-lot-eval.json
-python private_lot_cases.py private/transactions.csv private/schwab-reconciliation.json --month 2026-10 --output private/october-evidence-cases.json
-python -m unittest -v
-```
-
-The cash audit sums Schwab's reported Amount using decimal arithmetic. Blank
-amounts remain missing and are flagged by source row. Fees are preserved and
-the audit avoids deducting fees a second time. Net transaction cash and
-realized P&L are separate measures.
-
-The spread audit proposes mutually unique opposite-side pairs with the same
-effective date, open or close phase, underlying, option right, expiry, and
-absolute quantity, and different strikes. A unique pairing still needs
-trade-confirmation evidence to establish order membership.
-
-The lot matcher consumes earlier closes, handles partial fills across lots,
-and allocates cash to cents. It uses FIFO with zero starting inventory and
-reverse CSV row order for same-day ties. The diagnostic also compares LIFO.
-Missing pre-export inventory, broker lot elections, same-day ordering, and
-contract events can affect the result. The matcher flags unsupported events.
-Comprehensive wash-sale matching, assignments, exercise accounting, strategy
-attribution, and roll reconstruction remain research work.
-
-## Post-train on synthetic data
-
-Run these commands on a CUDA-enabled Linux PyTorch environment. The training
-script generates synthetic inputs itself. Qwen3-8B ran with 4-bit NF4 and LoRA
-on a single RTX 4090 Runpod Pod.
-
-```bash
-python -m pip install -r requirements-pilot.txt
-python -u train_pilot.py --task spread --output artifacts/spread-pilot
-python -u train_pilot.py --task lot --sft-steps 32 --rl-steps 24 --eval-count 48 --output artifacts/lot-pilot
-```
-
-- **Spread task:** Return the exact row IDs of both legs and their signed net
-  cash. The verifier checks both fields.
-- **Lot-evidence task:** Given a requested opening date, quantity, and action,
-  return the supporting row IDs or flag insufficient evidence. This checks
-  whether the recorded rows support the request. The ledger separately handles
-  remaining inventory and P&L.
-
-Each run saves a stock, SFT, and GRPO scorecard, individual replies, and both
-LoRA adapters. These were the results on the synthetic lot-evidence pilot:
-
-| Checkpoint | Supported cases | Missing evidence | Total |
-| --- | ---: | ---: | ---: |
-| Stock Qwen3-8B | 0/24 | 19/24 | 19/48 |
-| Supervised fine-tuning | 20/24 | 17/24 | 37/48 |
-| GRPO | 7/24 | 24/24 | 31/48 |
-
-Supervised tuning led this pilot overall. GRPO detected more missing evidence
-but rejected more supported cases. These results measure the synthetic task.
-This command reproduces the historical Qwen training pilot.
-
-## Evaluate locally against broker evidence
-
-Acquire the Qwen3-8B model files and the matching SFT adapter before running
-the evaluator. Install PyTorch, Transformers, Accelerate, PEFT and
-bitsandbytes with support for your local CUDA or CPU backend. The evaluator
-loads the base and adapters from local paths. The GRPO adapter is optional.
-
-```powershell
-$env:HF_HUB_OFFLINE = "1"
-$env:TRANSFORMERS_OFFLINE = "1"
-python evaluate_private_model.py private/october-evidence-cases.json --model artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft --output private/october-model-scorecard.json
-```
-
-The evidence scorecard breaks out supported and missing-evidence cases.
-Clean examples are selected from broker ties, so use them as regression cases
-and inspect the disagreement set alongside them. For the separate allocation
-and P&L benchmark, `lot_eval.py --predictions` accepts a JSON object keyed by
-case ID. Each prediction has a `quantity_by_open_date` object keyed by ISO
-dates and a `pnl` decimal string.
-
-## Source map
-
-| File | Role |
-| --- | --- |
-| `ledger.py` | CSV parsing, cash audit, and vertical spread candidates |
-| `option_lots.py` | Provisional option lot consumption and P&L |
-| `reconcile.py` | Closed-lot and holdings comparisons |
-| `lot_eval.py` | Broker-checked allocation and P&L evaluation |
-| `private_lot_cases.py` | Local opening-evidence prompts and labels |
-| `pilot_data.py`, `lot_pilot_data.py`, `rewards.py` | Synthetic cases and executable checks |
-| `train_pilot.py`, `evaluate_private_model.py` | GPU pilot and local checkpoint comparison |
-
-## Data handling
-
-Put brokerage exports in the Git-ignored `private/inputs/` directory.
-Keep derived reports and private prompts under `private/`, and model
-checkpoints under `artifacts/`. Check new commits for sensitive files
-before pushing. Runpod examples are synthetic or deliberately redacted.
-Raw exports stay local.
-
-### October holdout result
-
-Both checkpoints ran locally with the same Qwen3-8B Q4_0 GGUF base,
-llama.cpp runtime, prompt format, and greedy decoding. The supervised
-checkpoint used the converted LoRA adapter. Exact match required both the
-expected evidence status and the exact supporting source row IDs.
-
-| Checkpoint | Supported | Missing evidence | Total |
-| --- | ---: | ---: | ---: |
-| Stock Qwen3-8B | 0/21 | 32/32 | 32/53 |
-| Supervised LoRA | 21/21 | 32/32 | 53/53 |
-
-The result covers this selected October evidence benchmark. A new holdout
-should include other months, ambiguous lots, and partial quantities before
-using the score to justify a larger model. P&L accuracy and broker lot
-allocation require their own evaluations.
-
-To reproduce the CPU comparison, prepare a Qwen3-8B Q4_0 GGUF, its local
-Hugging Face tokenizer files, and a compatible LoRA GGUF converted from the
-SFT checkpoint. The run used llama-cpp-python 0.3.35.
-
-```powershell
-python evaluate_gguf.py private/october-evidence-cases.json --model artifacts/qwen3-8b-base/qwen3-8b-q4_0.gguf --tokenizer artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft/adapter.gguf --output private/october-gguf-scorecard.json
-```
-
-### Harder lot-evidence benchmark
-
-Build a fresh local holdout from months outside October. The builder excludes
-contract identities seen in the October reconciliation. Broker-reported dates
-and quantities form the claims to check against recorded opening rows.
-
-```powershell
-python hard_lot_holdout.py private/transactions.csv private/realized.csv --months 2026-07 2026-08 2026-09 2026-11 --output private/hard-lot-holdout.json
-```
-
-Cases distinguish supported evidence, missing quantities or dates, and
-ambiguous row allocations. A case can include multiple opening dates or an
-opening row larger than the matched quantity. The evidence rule checks the
-recorded rows. Prior consumption and broker lot elections need a separate
-inventory and accounting check.
-
-The matching GPU curriculum generates synthetic cases on demand. Compare the
-stock, previous SFT (optional), new SFT, and GRPO scorecards by evidence status.
-The hard-lot GRPO reward gives +1 for exact status and rows, -0.5 for claiming
-support when evidence is missing, and 0 for other errors. The evaluation metric
-remains exact match for every checkpoint.
-
-```bash
-python -u train_pilot.py --task hard-lot --train-count 240 --sft-steps 64 --rl-steps 36 --eval-count 60 --output artifacts/hard-lot-pilot
-```
-
-The existing supervised adapter scored 140/196 exact on the harder private
-holdout (58/64 supported, 80/130 missing evidence, and 2/2 ambiguous). It
-incorrectly marked 43 missing-evidence cases as supported. The ambiguity
-sample is too small for a general performance claim. Run the GGUF evaluator
-with --sft-only to reproduce the supervised-only comparison.
-
-The first hard-lot GPU pilot used a balanced, 60-case synthetic holdout
-with 20 cases per evidence status:
-
-| Checkpoint | Supported | Missing evidence | Ambiguous | Total | Missing labeled supported |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Stock | 0/20 | 3/20 | 18/20 | 21/60 | 1 |
-| Previous SFT | 1/20 | 4/20 | 14/20 | 19/60 | 3 |
-| New SFT | 3/20 | 7/20 | 16/20 | 26/60 | 6 |
-| New SFT + GRPO | 0/20 | 7/20 | 18/20 | 25/60 | 0 |
-
-GRPO eliminated false claims of support in this synthetic test and lost all
-exact supported answers. The older private-holdout score used a different
-case distribution. Testing either new adapter on the private holdout would
-be required to measure transfer.
-
-### Enforce evidence in the ledger
-
-Replay saved model replies against the deterministic evidence gate:
-
-```powershell
-python ledger_evidence.py private/hard-lot-holdout.json private/hard-lot-sft-scorecard.json --output private/hard-lot-ledger-replay.json
-```
-
-The gate returns exact required and recorded quantities, shortfalls, and
-matching transaction rows by date. The supervised model scored 140/196
-while the gate reproduced 196/196 holdout labels and reduced false claims
-of support from 43 to zero in this replay. The holdout labels use the same
-evidence rule, making this a consistency check rather than independent
-validation of remaining inventory, realized P&L, or natural-language
-interpretation. The replay uses previously saved model replies.
-
-### Natural-language ledger routing
-
-The routing benchmark generates 30 questions from the private harder holdout.
-Each prompt supplies a candidate list of closes and asks the model to route
-to an evidence check, ask for clarification, or report no match. A close ID
-must refer to a listed candidate. The ledger retrieves the recorded claim
-and computes evidence status and source rows from structured inputs.
-
-```powershell
-python query_benchmark.py private/hard-lot-holdout.json --output private/query-benchmark.json
-python evaluate_gguf.py private/query-benchmark.json --model artifacts/qwen3-8b-base/qwen3-8b-q4_0.gguf --tokenizer artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft/adapter.gguf --query-cases --output private/query-model-scorecard.json
-```
-
-The benchmark scores schema-valid output, operation, and close ID
-separately. Candidate retrieval and unrestricted natural-language
-questions are outside this benchmark.
-
-On the first local 30-question run, stock Qwen routed 17/30 correctly and
-the supervised adapter routed 18/30. On the 18 questions with a unique
-match, the ledger returned the expected evidence for all 17 correct stock
-routes and all 18 supervised routes. Both models attempted an evidence
-check for all eight ambiguous and four no-match questions. All replies
-matched the JSON schema. Private prompts and replies are Git-ignored.
-
-### Ledger-controlled close resolution
-
-The filter benchmark reruns the same questions without candidate lists.
-Qwen extracts the ticker, expiration, strike, right, close month, and
-source line. The ledger matches those filters against the local evidence
-index and runs the evidence check only for a unique match.
-
-```powershell
-python query_benchmark.py private/hard-lot-holdout.json --output private/query-filter-benchmark.json
-python evaluate_gguf.py private/query-filter-benchmark.json --model artifacts/qwen3-8b-base/qwen3-8b-q4_0.gguf --tokenizer artifacts/qwen3-8b-base --sft artifacts/lot-pilot/sft/adapter.gguf --filter-index private/hard-lot-holdout.json --output private/query-filter-scorecard.json
-```
-
-Both models routed 26/30 correctly: 14/18 unique closes, 8/8
-clarifications, and 4/4 no-match cases. Stock extracted all filters
-exactly on 22/30 questions and SFT on 24/30. All 30 gold filter sets
-resolved correctly over the 196-case local evidence index. This test
-does not establish retrieval accuracy over a full brokerage account.
-
-## Portfolio and position question benchmark
-
-The [TQQQ, SOXL, and XLK benchmark](PORTFOLIO_QUESTION_BENCHMARK.md) defines
-20 portfolio risk, position, and tax-reporting questions with input
-requirements and scoring criteria. Prepare expected values from local
-brokerage data before scoring model answers.
-
-## Packaging
-
-Install the standard-library ledger commands with `python -m pip install .`
-on Python 3.11 or newer. The training experiments have separate runtime
-requirements. Run the ledger tests with `python -m unittest discover`.
-
-Use a **source ZIP** for the current CLI prototype. The ledger and its tests
-run with Python 3.11+ and the standard library. Build the ZIP from a reviewed
-Git commit so recipients can reproduce the exact source version.
-
-```powershell
-git ls-files
-New-Item -ItemType Directory -Force artifacts | Out-Null
-git archive --format=zip --prefix=brokerage-ledger-rl/ --output=artifacts/brokerage-ledger-rl-source.zip HEAD
-tar -tf artifacts/brokerage-ledger-rl-source.zip
-```
-
-Review the archive listing before sharing. Git archives every tracked file
-at the selected commit, even if an ignore rule would match it. After
-extracting the ZIP, run `python -m unittest -v` and use the local workflow
-above with your own exports.
-
-| Component | How to package it |
-| --- | --- |
-| Base model and tokenizer | Obtain Qwen3-8B from its publisher and record the revision or checksums. For CPU inference, use a compatible GGUF and local tokenizer files. |
-| Supervised LoRA | Distribute the matching adapter and its configuration separately. For llama.cpp, provide the converted adapter GGUF and record its conversion settings and checksum. |
-| Local inference | Use a Python environment with Transformers and a compatible llama-cpp-python build. The CPU benchmark used llama-cpp-python 0.3.35. |
-| GPU training | Use the source ZIP with `requirements-pilot.txt` in a CUDA-enabled PyTorch environment. The pilot generates its own synthetic examples. |
-| Brokerage data | Each user supplies local exports. Keep exports, derived reports, private prompts, model replies, and credentials outside distributed bundles. |
-
-A source ZIP plus a separate adapter is the simplest handoff. A Python
-wheel or desktop installer would require additional packaging work. Include
-the source commit, base model revision, adapter checksum, and tested
-runtime versions with a release.
-
-## Annual broker review
-
-With both CSVs for the same account, generate the local annual report:
-
-```powershell
-python period_review.py "private/inputs/2025 Transactions.csv" "private/inputs/2025 Realized.csv" --year 2025 --output private/2025-period-review.json
-```
-
-The report includes monthly transaction cash, option-close comparisons,
-and broker-reported short-term and long-term realized amounts by
-underlying. It keeps source row numbers, flags lots opened before the
-transaction export, and compares proceeds less basis with the reported
-gain and disallowed loss. It reports Schwab's fields as provided. It
-does not infer replacement lots or resolve close-date mismatches.
-
-The realized export is the source of each broker lot's reported open/close
-allocation. The annual review joins its Transaction Closed Date to
-transaction events and checks quantity at the instrument-and-date level.
-It preserves the displayed Closed Date alongside the transaction date.
-Opening records are linked by the broker's opening date where available,
-with side and quantity checks and explicit statuses for gaps. A group
-match corroborates the available source rows. It does not assign individual
-fills within a many-to-many group or reconstruct inventory before the export.
-
-### 2025 broker-link supervised fine-tune
-
-Generate redacted examples locally, then pass the explicit split to the GPU
-pilot. The generator keeps each instrument in one split and omits the
-original ticker, dates, dollar amounts, and source IDs. Each prompt gives
-reconciled evidence descriptions and asks for a status and temporary
-source aliases.
-
-```powershell
-python broker_training_examples.py private/2025-period-review.json --output private/broker-sft-redacted.json
-python train_pilot.py --task lot --examples-file private/broker-sft-redacted.json --sft-steps 160 --rl-steps 0 --output artifacts/broker-sft
-```
-
-Training used 270 examples. The 54 held-out examples use the same prompt
-format and test whether the model can cite provided evidence labels.
-The result does not measure retrieval from raw brokerage records or
-accuracy on new question formats.
-
-## Generate a report for the query UI
-
-1. Export **Transaction History**, **Realized Gain/Loss Detail**, and a dated
-   **Positions** snapshot from Schwab for the same account. Save them locally
-   as `private/transactions.csv`, `private/realized.csv`, and
-   `private/holdings.csv`. Transaction history can cover earlier periods to
-   help link opening trades.
-2. From the repo root, run this with Python 3.11 or later. Replace the month
-   with the realized period you want and the date with the date on your
-   holdings export.
-
-   ```powershell
-   python portfolio_review.py private/transactions.csv private/realized.csv private/holdings.csv --month 2025-12 --as-of 2025-12-31 --output private/portfolio-report.json
-   ```
-
-3. In the query workspace, select **Load portfolio report** and open
-   `private/portfolio-report.json`. Pick one of the ten examples and select
-   **Run query**. The workspace displays the computed answer as readable
-   text with expandable source evidence.
-4. In the private hosted workspace, type a free-form question and select
-   **Run query**. For example, ask “What were the unrealized losses and
-   recorded dividends for AAPL and MSFT in 2026? Show each ticker and the
-   combined totals.” Use tickers and a year covered by your report.
-   **Inkling connection** is available for a separate OpenAI-compatible
-   Inkling server ending in `/v1` that allows requests from the Site origin.
-
-The Site sends the question text to Inkling. For ticker-level P&L and
-dividend queries, it validates the returned tickers, metrics, year, and
-answer placeholder before calculating the figures in the browser.
-Unrealized P&L is dated to the holdings snapshot. Dividend totals cover
-the transaction dates shown and include recorded reinvested dividends.
-The report now includes transaction rows, annual realized lots, and
-holdings. Keep the JSON and source exports private.
-
-The managed deployment uses stock Inkling 2 Mini in 4-bit GGUF format,
-served by llama.cpp on Runpod Serverless. It has zero minimum workers,
-allows one L4 on demand, and has a 15-second idle timeout. The Site source
-is versioned separately in Sites. Its deployed planner passed one hosted
-test with a synthetic two-ticker report, returning the expected $150
-unrealized loss and $40 in dividends. This verifies the compound query path
-for that case. It does not establish cold-start reliability or accuracy
-across arbitrary portfolio questions.
-
-The JSON comes from the CSVs and can be regenerated whenever they change.
-Generating the report requires no model training. The hosted workspace is
-private. The command above works independently of access to the workspace.
-
-## Monthly portfolio review
-
-The ledger defaults to effective dates for cash buckets, modeled closes,
-and broker realized totals. Use `--date-basis posted` for the posted view.
-The effective view uses Transaction Closed Date when the broker supplies
-it and falls back to Closed Date. Both source dates remain in the report.
-Reported realized amounts are reconciled across all months and the year.
-
-`portfolio_review.py --config configs/portfolio-example.json` selects the
-example's tickers and evidence scope. Without a config or `--tickers`,
-the CLI uses the holdings underlyings. The numbered answers remain
-compatible with the existing Site.
-
-Install the project and run a read-only audit with the unified CLI:
+A local-first brokerage ledger that reconciles option lots, calculates portfolio
+figures, and reports the rows behind its answers. The browser computes figures
+from a local report. Hosted Inkling 2 Mini interprets free-form questions and
+returns a structured query plan.
+
+[Release v0.4.0](https://github.com/manishklach/brokerage-ledger-rl/releases/tag/v0.4.0) · [Blog Part 1](BLOG.md) · [Blog Part 2](BLOG_PART_2.md) · [Apache 2.0](LICENSE)
+
+## Current status
+
+- The ledger supports FIFO partial settlements, quarantines unresolved events,
+  and defaults to effective dates across monthly and annual reports.
+- The private Site serves stock Inkling 2 Mini on an on-demand L4. It handles
+  ticker-level realized P&L, snapshot unrealized P&L, and recorded dividends.
+- The Inkling attention LoRA pilot ran on one RTX PRO 6000 Blackwell. Step 12
+  was selected on synthetic teacher-forced NLL. The paired generation
+  comparison on broker evidence remains unfinished.
+
+## Benchmarks
+
+Dates are local run or scorecard dates. When only a commit establishes the
+date, the column says **recorded**. An unrecorded decoding parameter is shown
+as **unlogged**. Synthetic cases and selected broker cases measure different
+tasks. Private source rows and raw scorecards stay local.
+
+| Benchmark | Model or workflow | N and split | Date or run | Decoding and hardware | Metric | Result | Caveat |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Inkling lot-evidence validation | Stock and LoRA steps 4, 8, 12 | 100 synthetic validation cases, 2,252 answer tokens per variant | 2026-11-22 | Teacher-forced, same NeMo runtime and RTX PRO 6000 | Mean NLL per answer token ↓ | Stock **1.1473**, step 4 **0.2941**, step 8 **0.1801**, step 12 **0.1638** | Step 12 was selected solely on this metric. Lower NLL after SFT is expected. Generated accuracy, status recall, and false support are unmeasured. |
+| Portfolio intent routing | Stock Inkling 2 Mini | 44 synthetic regression questions | 2026-11-21, recorded in `555f5e4` | Default effort, 80 tokens, greedy, B200 vLLM | Exact route | **4/44**, 40 length-truncated | Same token cap as Qwen below. Effort and hardware differ. |
+| Portfolio intent routing | Stock Inkling 2 Mini | Same 44 regression questions | 2026-11-21, recorded in `555f5e4` | Low effort, 512 tokens, greedy, B200 vLLM | Exact route | **41/44**, zero length-truncated | Longer budget and different effort. Compare with the 80-token row to see how the setup affects the result. |
+| Portfolio intent routing | Qwen3-8B stock, broker SFT, and routing SFT | Same 44 synthetic questions, two per route | 2026-11-20, recorded in `784c8dd` | 80 tokens, greedy, RTX 4090 | Exact route | **38/44 each** | Same cap as Inkling's 80-token run. This is a routing regression set. |
+| 2024 prepared evidence and unverified closes | Stock Inkling 2 Mini | 168 redacted broker cases + 24 synthetic unverified closes | 2026-11-21, saved B200 scorecard | Low effort, 512 tokens, greedy, B200 vLLM | Exact status and integer citations | **99/192**. Zero length-truncated. | Replay found 84 citation-type-only misses. Quoted IDs fail the exact metric. No false confirmations on the 24 synthetic unverified cases. |
+| Expanded opening evidence | Stock Inkling 2 Mini | 48 synthetic holdout cases, 16 per status | 2026-11-21, saved scorecard | Low effort, 512 tokens, greedy, B200 vLLM | Exact status and citations | **45/48**. False support **0/32** expected unsupported cases. | All three misses hit the token cap. |
+| Expanded evidence, targeted retry | Stock Inkling 2 Mini | The 3 length-truncated cases above | 2026-11-21, saved retry scorecard | Low effort, 1,024 tokens, greedy, B200 vLLM | Exact status and citations | **3/3**, zero length-truncated | Targeted retry only. |
+| Frozen broker comparison | Stock Inkling vs step-12 LoRA | 186 private cases, 17 supported and 169 missing evidence | 2026-11-22, attempted | Greedy, 64 tokens, RTX PRO 6000 NeMo | Per-model exact, status recall, false support, and supported both-correct rate | **Not yet measured** | Original run stalled compiling kernels. Fixed-shape retry generated 12 stock replies and no matched batch. |
+| External frozen broker review | Reported stock Inkling 2 Mini | 29 cases reported externally | 2026-11-22, review reference. GPU run date unverified. | Unverified | Reported exact score | **Unverified** | Original 29-case file, run settings, truncations, and false-support denominator were unavailable. This is distinct from the local 186-case frozen set. |
+| H100 serving smoke test | Stock Inkling 2 Mini | 1 synthetic evidence request | 2026-11-21, saved scorecard | Low effort, 1,024 tokens, greedy, H100 SXM vLLM | Exact status and citations | **1/1** | Startup and one response only. |
+| L4 serving smoke test | Stock Inkling 2 Mini GGUF | 1 synthetic route | 2026-11-22, saved scorecard | 512 tokens, temperature 0, effort unset, L4 llama.cpp | Exact route | **1/1** | Quantized inference startup and one response only. |
+| Site compound query smoke test | Hosted stock Inkling + browser ledger | 1 synthetic two-ticker question | 2026-11-22, deployed Site test | L4 llama.cpp, 512-token planner cap | Expected plan and browser totals | **Passed** | Validates one hosted workflow. Earlier cold starts failed. |
+| Synthetic lot pilot | Qwen3-8B stock, SFT, GRPO | 48 synthetic cases, 24 supported and 24 missing | 2026-11-19, recorded in `5871509` | Greedy, 80 tokens, RTX 4090 | Exact status and citations | **19/48**, **37/48**, **31/48** respectively | GRPO improved missing-evidence detection and lost supported matches. |
+| October opening evidence | Qwen3-8B stock and SFT | 53 selected private cases, same prompt format | 2026-11-19, saved scorecard | Greedy, 80 tokens, local CPU llama.cpp Q4_0 | Exact status and citations | Stock **32/53**, SFT **53/53** | Small, selected clean cases. |
+| 2025 broker-link evidence | Qwen3-8B stock, previous SFT, new SFT | 54 selected redacted cases, held out by instrument, same format | 2026-11-20, recorded in `e553653` | RTX 4090 pilot, decoding unlogged | Exact status and aliases | **0/54**, **11/54**, **54/54** respectively | Small same-format task. The October set uses a different prompt and split. |
+| Hard private opening evidence | Qwen3-8B SFT | 196 private cases, 64 supported, 130 missing, 2 ambiguous | 2026-11-19, saved scorecard | Greedy, 80 tokens, local GGUF | Exact status and citations | **140/196**, including 58/64 supported, 80/130 missing, 2/2 ambiguous. False support **43/132** expected unsupported cases. | The ambiguity subset has two cases. |
+| Hard private opening evidence replay | Deterministic ledger gate | Same 196 private cases | 2026-11-19, saved replay | No decoding, CPU | Rule agreement | **196/196** by construction because the gate also defines the labels. False support **0/132** expected unsupported cases. | Rule consistency check against the same labels. |
+| Balanced hard lot pilot | Qwen3-8B stock, previous SFT, new SFT, SFT + GRPO | 60 synthetic holdouts, 20 per status | 2026-11-19, recorded in `5e293d2` | Greedy, 80 tokens, RTX 4090 | Exact status and citations | **21/60**, **19/60**, **26/60**, **25/60** respectively | GRPO had zero exact supported answers. |
+| Close routing, model-only with candidates | Qwen3-8B stock and SFT | 30 private questions | 2026-11-19, saved scorecard | Greedy, 80 tokens, local GGUF | Exact operation and close ID | Stock **17/30**, SFT **18/30** | Candidate lists provided to the model. |
+| Close resolution, ledger-assisted | Qwen3-8B stock or SFT + local filter resolution | Same 30 questions, no candidate list in prompt | 2026-11-19, saved scorecard | Greedy, 128 tokens, local GGUF + deterministic lookup | Exact operation and close ID after lookup | **26/30 each** | Model extracts filters. The ledger resolves them. |
+| Portfolio, model-only synthesis | Qwen3-8B SFT | 20 questions, 40 possible rubric points | 2026-11-19, saved scorecard | Local GGUF Q4_0, decoding cap unlogged | Rubric points | **27/40** | Prepared evidence. Tax amounts were unavailable. |
+| Portfolio, scripted lookup | Ledger, no model | Same 20-question rubric | 2026-11-20, saved scorecard | No decoding, CPU | Rubric points | **33/40** | Predefined queries and local lookup. Different execution path from model-only synthesis. |
+
+> **Benchmark glossary**
+>
+> - **Verifier** checks ledger facts or evidence. A **scorer** compares a response
+>   with the expected outcome. A **benchmark** combines the cases, runtime
+>   settings, and scorer. A **holdout** is a split withheld from training and
+>   used for evaluation. A validation holdout can select a checkpoint. A test
+>   holdout stays separate from that choice.
+> - **Exact** requires the expected status and integer citation IDs on lot
+>   tasks, or the expected route key on routing tasks. **Status-only** checks
+>   the label alone. **Status recall** divides correct predictions of a
+>   status by the number of cases whose expected status is that label.
+> - **False-support rate** divides incorrect supported predictions by the
+>   number of cases with an expected non-supported status. For the paired
+>   comparison, the denominator uses only matched unsupported cases.
+> - **Supported both-correct rate** is the share of matched supported cases
+>   both models answer exactly. Report it alongside each model's exact
+>   accuracy, status recall, and false-support rate.
+> - **Teacher-forced NLL** averages the negative log probability of expected
+>   answer tokens while supplying the earlier expected tokens as context.
+>   It measures a known answer's likelihood.
+
+See [evaluation protocols](docs/evals.md), [training and recovery](docs/training.md),
+and the [portfolio rubric](PORTFOLIO_QUESTION_BENCHMARK.md).
+
+## Quickstart
+
+Use Python 3.11 or newer. The ledger CLI uses the standard library.
 
 ```bash
 python -m pip install .
-ledger-review transactions.csv --realized realized.csv --year 2026 --date-basis effective --format json --output ledger-report.json
+ledger-review private/inputs/transactions.csv   --realized private/inputs/realized.csv --year 2026   --date-basis effective --format json --output ledger-report.json
+python -m unittest discover
 ```
 
-The CLI exits with 0 for a clean report, 1 for unresolved evidence or
-rejected rows, and 2 for invalid input. It records source hashes and row
-counts, refuses output paths inside a private directory or over a source
-export, and writes the report atomically. Choose an existing output
-directory that you control because the report contains financial data.
+The CLI requires an explicit output path outside a `private` directory.
+Choose a location you control because the report contains financial data.
+It records source-file hashes, row counts, date basis, and package version.
+Exit codes are 0 for clean output, 1 for a completed report with unresolved
+evidence or rejected rows, and 2 for invalid input or a failed invariant.
 
-The `option_lots.py` CLI and Python `match_options()` API use the effective
-month by default. Pass `--date-basis posted` in the CLI or
-`date_basis="posted"` in Python for the posted-month view.
+Effective reporting uses the transaction date and broker Transaction Closed
+Date when supplied. Posted mode uses Posted Date and broker Closed Date.
+The report preserves both source dates. Use the broker's tax statement for
+its reported tax period.
 
-Unsupported option events affect provisional closes from their effective
-date forward. The matcher scopes a blocker to the long or short inventory
-when the action identifies the affected side. A signed expiration,
-assignment, or exercise can remove all known remaining lots on a side
-when its quantity ties and that side has no prior blockers. A partial
-settlement on a clean side can consume quantity from a single remaining
-opening lot. Later closes cite that settlement and use the remaining lot
-basis in their provisional P&L. Partial settlements with multiple possible
-lots and earlier uncertainty still require review. The holdings
-reconciliation reports unresolved contracts with source lines and reasons.
+## Query a portfolio report
 
-Run the local workflow from the transaction, realized gain/loss, and dated
-positions exports. The optional evidence index supports the benchmark's
-September close question.
-
-```powershell
-python portfolio_review.py "private/inputs/2025 Transactions.csv" "private/inputs/2025 Realized.csv" private/inputs/holdings-2026-11-19.csv --month 2025-12 --as-of 2026-11-19 --evidence-index private/hard-lot-holdout.json --output private/december-2025-portfolio-review.json
-```
-
-The report keeps the realized reporting month and holdings snapshot date
-explicit. It calculates broker-reported realized results by underlying and
-term, marks-based concentration and option expirations, and points to source
-CSV rows. Reported market values and gross marks measure the stated marks.
-Directional delta exposure and stress repricing require separate inputs.
-
-The first run covered 198 December transactions and 79 realized lots, of
-which 75 linked to closing transaction groups by date and quantity. The
-scripted workflow scored 33/40 on the documented 20 questions. It answered
-seven, returned partial evidence on seven, requested clarification on three,
-and flagged missing inputs on three. The tax answers were checked against
-the supplied 2025 realized CSV. This run used numbered queries and automatic
-record lookup. The earlier 27/40 run tested a model answering from prepared
-evidence and measures a different part of the system.
-
-### Portfolio routing GPU pilot
-
-The portfolio router maps a natural-language question to one of the 20
-documented ledger queries, or returns clarification or unsupported. The
-synthetic exercise measures intent classification. It does not extract
-arbitrary query parameters or execute ledger queries.
+Generate a browser-readable report from transactions, realized lots, and a
+dated holdings export. Adjust the period and snapshot date to your records.
 
 ```bash
-python train_pilot.py --task portfolio-route --train-count 264 --eval-count 44 --sft-steps 160 --rl-steps 0 --output artifacts/portfolio-route
+python portfolio_review.py private/inputs/transactions.csv   private/inputs/realized.csv private/inputs/holdings.csv   --month 2026-11 --as-of 2026-11-19 --output private/portfolio-report.json
 ```
 
-The run used an RTX 4090 and 264 examples based on synthetic wording
-templates. The test used 44 separately worded questions, two per route,
-with the same route catalog supplied to each checkpoint. Stock Qwen3-8B,
-the prior broker-evidence adapter, and the new routing adapter each
-scored **38/44** exact. The new adapter fixed some individual routes
-but introduced others. All three confused at least one exposure ranking,
-bid/ask, and roll question. No brokerage records were uploaded for
-this run.
-
-### Inkling 2 Mini GPU baseline
-
-The same 44 synthetic routing questions also ran through stock
-[Inkling 2 Mini](https://thinkingmachines.ai/model-card/inkling-2-mini/) on
-a single Runpod B200 using the [vLLM model image](https://recipes.vllm.ai/thinkingmachines/Inkling-2-Mini).
-
-| Checkpoint and decoding | Exact routes | Length-truncated |
-| --- | ---: | ---: |
-| Qwen3-8B stock and both tested adapters, 80 tokens | 38/44 each | See the Qwen pilot scorecards |
-| Inkling 2 Mini, default effort and 80 tokens | 4/44 | 40/44 |
-| Inkling 2 Mini, low effort and 512 tokens | 41/44 | 0/44 |
-
-The rows use the same prompts and scorer. The token budgets and reasoning
-settings differ, so the higher score does not establish an equal-budget
-advantage. The low-effort run missed one expiration-window, one fund-overlap,
-and one partial-close question. This experiment used stock Inkling weights
-and did not include fine-tuning or any brokerage inputs.
-
-With an authenticated OpenAI-compatible vLLM server running, set
-PORTFOLIO_BENCHMARK_API_KEY in the environment. The client also needs curl
-on PATH.
-
-```bash
-python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --startup-timeout 1200 --output artifacts/inkling-2-mini/portfolio-route-low-effort.json
-```
-
-### Inkling routing training data
-
-The first Inkling adapter targets lot evidence. The separate routing exporter
-is available for experiments on portfolio query selection.
-Keep stock Inkling as the primary baseline and retain Qwen scores for
-historical comparison. Use the same decoding settings for stock and
-fine-tuned Inkling and report exact routes, missed routes, and cutoffs.
-The existing 44 questions are a regression set. Add a fresh holdout before
-making a generalization claim.
-
-Prepare the synthetic training and evaluation splits as chat JSONL:
-
-```bash
-python prepare_inkling_sft.py --output artifacts/inkling-2-mini/sft-data
-```
-
-The exporter writes 264 training examples and 44 held-out questions
-without reading brokerage files. Keep the evaluation split out of model
-updates. NVIDIA's published NeMo AutoModel recipes use four GB200s, while
-SkyRL documents a Mini training configuration on eight B200s. The single
-B200 setup above is verified for inference. [NeMo AutoModel recipe](https://docs.nvidia.com/nemo/automodel/nightly/model-coverage/vision-language-models/thinkingmachines/Inkling-2-Mini) · [SkyRL recipe](https://docs.skyrl.ai/docs/models/inkling2)
-
-### Lot evidence evaluation
-
-Use the report's redacted lot examples to evaluate whether Inkling returns the
-expected evidence status and cites exactly the expected row aliases. The
-evaluator adds 24 synthetic unverified-close cases and reports exact accuracy
-for each status. Keep the real exports and scorecard in the ignored
-`private/` folder.
-
-```bash
-python broker_training_examples.py private/2024-period-review.json --output private/inkling-2024-lot-evidence.json
-python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --lot-holdout private/inkling-2024-lot-evidence.json --output private/inkling-2024-stock-h100.json
-```
-
-The prompts describe already-classified ledger evidence. This benchmark
-measures interpretation and citation accuracy for that evidence.
-
-### Fresh opening-evidence checks
-
-The six independently labeled synthetic cases cover cross-month partial
-allocations, exact multi-row allocations, insufficient quantity, and
-ambiguous lot elections. Keep these cases out of training. They are a
-targeted regression check with a small sample size.
-
-```bash
-python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --fresh-evidence --output private/inkling-fresh-evidence.json
-```
-
-The scorecard records exact matches by status, failed requests, truncation,
-and latency for completed requests.
-
-### Expanded Inkling holdout
-
-The expanded set has 48 synthetic contracts across eight month boundaries,
-with 16 cases each for supported, ambiguous, and missing evidence. It
-includes exact split fills, competing allocations, one-contract shortfalls,
-and distractors with a different strike, action, or date. The answer keys
-are checked against the quantity verifier. Keep this set out of training
-and prompt selection. The six earlier cases remain available as a regression
-set using `--fresh-evidence`.
-
-```bash
-python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --expanded-evidence --output private/inkling-expanded-evidence.json
-```
-
-The report adds exact scores by scenario, status-only accuracy, and false
-claims of support. The cases test opening evidence rules on synthetic data.
-A separate broker-backed holdout requires contracts that were kept out of the
-earlier experiments.
-
-### Freeze a broker-backed test set
-
-`freeze_broker_holdout.py` builds a local opening-evidence test set for
-specified months. Supply the realized exports and case indexes used in
-prior experiments as exclusions. The builder also excludes contracts in
-other realized months in the source export and contracts with settlement
-events, since this scorer does not reconstruct settlement-adjusted
-inventory. It prints coverage counts and a SHA-256 digest and refuses to
-overwrite a frozen file.
-
-```bash
-python freeze_broker_holdout.py private/transactions.csv private/realized.csv --months 2026-05 2026-06 --exclude-realized private/prior-realized.csv --exclude-cases private/hard-lot-holdout.json --output private/inkling-broker-holdout-v1.json
-python evaluate_portfolio_server.py --base-url http://127.0.0.1:8000/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 1024 --broker-evidence private/inkling-broker-holdout-v1.json --output private/inkling-broker-baseline.json
-```
-
-Keep the frozen test cases out of training, prompt selection, and checkpoint
-selection. Inspect per-status recall, the false-support rate among
-unsupported cases, and failed or truncated requests. The score measures
-opening-evidence classification under the documented rule. It does not
-measure lot elections, settlement attribution, or live Web UI routing.
-
-Stock Inkling 2 Mini on a Runpod B200 scored **45/48** exact at low reasoning
-effort with a 512-token cap. It made zero false claims of support across the
-32 ambiguous or missing-evidence cases. All three misses were truncated.
-Those three cases scored **3/3** when retried at 1,024 tokens with the same
-reasoning setting. The retry covered only the truncated cases.
-
-Estimated GPU charges were $1.20 for the first startup attempt, $1.95 for the
-completed baseline, and $0.60 for the targeted retry. The temporary Pods
-were removed after use. Fine-tuning was deferred.
-
-### Inkling lot-evidence LoRA on one RTX PRO 6000
-
-Generate the targeted synthetic training split and independent validation
-split with:
-
-```powershell
-python prepare_inkling_lot_sft.py --output private/inkling-targeted-lot-sft
-```
-
-The generator produces 400 training and 100 validation examples. It
-covers single-row partial fills, missing opening dates, quantity
-shortfalls, exact fills, and ambiguous allocations. Validation uses a
-separate seed and year. The broker holdout is excluded from training
-and checkpoint selection.
-
-A single 96 GB RTX PRO 6000 Blackwell completed one text-only LoRA step
-and then reloaded that checkpoint to finish a 12-step pilot. The run used
-NeMo AutoModel at `46fa6a5`, BF16 parameters, rank-8 attention adapters,
-one example per step, and a 1,024-token sequence limit. The first smoke
-test and the resumed pilot cost an estimated $0.28 and $0.33 in GPU time.
-The earlier B200 attempt ended during container extraction.
-
-The recorded [smoke recipe](configs/inkling/rtx6000-smoke.yaml) and
-[resume recipe](configs/inkling/rtx6000-resume.yaml) use the same base
-model and resume from the first saved checkpoint. The original runner
-used the NVIDIA NeMo AutoModel 26.10 container pinned to
-`sha256:0e4279f2740b4de9c3884f5d434d1a1520057c825f8a28d1e66dd16515451e9c`,
-with the AutoModel source checkout at
-`46fa6a505910a1e3c9bf58930b89047a7b6d748c` on `PYTHONPATH`.
-The run recorded Transformers 5.18.0 and PyTorch
-`2.14.0a0+4fdf77b940.nv26.08` with CUDA 13.4.
-
-To reproduce the short training run on a compatible Linux GPU, make
-the project checkout available as `/workspace/ledger` and the pinned
-AutoModel checkout as `/workspace/automodel`. Run from the AutoModel
-checkout so the relative chat-template path resolves. Use fresh output
-directories if repeating an existing run.
-
-```bash
-export PYTHONPATH=/workspace/automodel
-export HF_HOME=/workspace/hf
-cd /workspace/automodel
-python /workspace/ledger/prepare_inkling_lot_sft.py --output /workspace/data
-automodel /workspace/ledger/configs/inkling/rtx6000-smoke.yaml --nproc-per-node 1
-automodel /workspace/ledger/configs/inkling/rtx6000-resume.yaml --nproc-per-node 1
-```
-
-The recipe dequantizes the released checkpoint into BF16 for training.
-It applies LoRA to the attention projections and keeps the expert
-weights frozen. The pilot reached about 51 GiB peak GPU memory in the
-recorded resumed-step logs. NeMo names checkpoints by zero-based
-step index, so `epoch_0_step_11` is the adapter after 12 optimizer steps.
-
-
-Stock Inkling and each adapter were evaluated in the same runtime against
-the same 100 synthetic validation examples, covering 2,252 answer
-tokens per variant. The adapter at step 12 had the lowest mean negative
-log likelihood per answer token.
-
-| Model | Mean validation NLL per answer token |
-| --- | ---: |
-| Stock Inkling | 1.1473 |
-| Step 4 | 0.2941 |
-| Step 8 | 0.1801 |
-| Step 12 | 0.1638 |
-
-This is **teacher-forced negative log likelihood**. Step 12 was chosen
-solely by this metric, with the expected preceding tokens supplied.
-Lower NLL after SFT is expected. The table supplies no generated-answer
-accuracy, status-recall, or false-support result.
-
-Reproduce the table from the pinned AutoModel checkout after running the
-training commands above. Keep the output and checkpoint files private.
-
-```bash
-python /workspace/ledger/evaluate_inkling_validation_nll.py \
-  --recipe /workspace/ledger/configs/inkling/rtx6000-smoke.yaml \
-  --validation /workspace/data/validation.json \
-  --checkpoints /workspace/inkling-resume \
-  --output /workspace/ledger/private/inkling-validation-scorecard.jsonl
-```
-
-Exact generated answers and false support require a separate comparison
-with the same prompts, decoding settings, and scorer. The available
-private broker set contains 186 cases and differs from the 29-case set
-described in external feedback. Neither comparison has produced results
-yet. Keep the original reports and holdouts private.
-
-`evaluate_inkling_checkpoint.py` is the native NeMo comparison runner.
-Provide the original single-GPU training recipe, the adapter's `model/`
-directory, a private frozen holdout, and a new output path. It uses greedy
-decoding with the same 64-token limit for both variants. It writes a batch
-only after both variants finish, so an interrupted run retains paired
-replies. Summarize the completed pairs with:
-
-```bash
-python summarize_inkling_generation.py private/inkling-broker-generation.jsonl
-```
-
-The headline paired accuracy counts cases where both models return the
-exact answer, divided by the number of matched **supported** cases.
-The summary gives per-model exact accuracy, status recall, and truncation
-separately for supported and unsupported cases. False-support rate uses
-matched unsupported cases as its denominator. Unpaired replies are
-counted separately.
-
-A GPU smoke test exposed repeated FlexAttention compilation as
-the decode sequence grew. The fixed-shape retry generated the stock
-half of the first batch before the runtime limit. No paired scores were
-produced.
-
-The pod was stopped after the run. Its persistent disk was tied to
-the original host, and Runpod could not allocate that GPU for recovery.
-The pod was restarted with CPUs and all four checkpoints were archived,
-including the optimizer state, recipes, and validation results. The
-local archive matched the SHA-256 digest computed on the pod. The pod
-and its 45 GB disk were then deleted. The archive is kept in the
-ignored `private/` directory and is excluded from GitHub and release
-downloads. The hosted L4 Site serves the stock model.
-
-
-
-### H100 vLLM smoke test
-
-A single Runpod H100 SXM served stock Inkling 2 Mini and returned the correct
-status and citations on one synthetic case. The release-day image failed
-at an Inkling CUDA kernel on our H100. The older generic nightly used as the
-base below needed the Mini model registration and an updated Transformers
-dependency. The combination below passed a live request. Full H100
-benchmark coverage remains unmeasured.
-
-Use CUDA 13.2 or later on the host. The tested Linux amd64 base image was
-`vllm/vllm-openai@sha256:3dfcb2ba18f41fce7400d643e52210a6c4f198019ead77146e9fb649ee600ceb`.
-Override the container entrypoint to run Bash and use this startup command.
-Set `VLLM_API_KEY` in the runtime environment and expose port 8000 for a
-temporary test.
-
-```bash
-uv pip install --system --no-deps \
-  'https://wheels.vllm.ai/ab18334a4f60da74db7de89fe95594e5ed0cda36/vllm-0.34.0rc1.dev1125%2Bgab18334a4-cp38-abi3-manylinux_2_28_x86_64.whl' \
-  'transformers==5.24.0' &&
-exec vllm serve thinkingmachines/Inkling-2-Mini \
-  --host 0.0.0.0 --port 8000 --reasoning-parser inkling \
-  --max-model-len 4096 --max-num-seqs 2 --enforce-eager
-```
-
-## Broker integrations
-
-Schwab is the first supported CSV integration.
-
-The portfolio engine accepts normalized transactions, realized lots, and positions
-through `portfolio_review.build_portfolio_report`. An integration translates a
-broker's export to those records and preserves source row numbers. The Schwab
-readers are the working example. The existing CSV command-line tools currently
-load Schwab formats. Other brokers can use the Python API by supplying their own
-readers.
-
-| Input | Normalized contract | Schwab example |
-| --- | --- | --- |
-| Transactions | A nonempty list of `ledger.Transaction` records with Python dates, canonical actions, source lines, and `Decimal` values for numeric fields | `ledger.read_export` |
-| Realized lots | Mappings with `broker_source_line`, `instrument`, `underlying`, `is_option`, positive `quantity`, ISO dates `opened`, `closed`, `transaction_closed`, `term`, `wash_sale_flag`, and the `portfolio_review.AMOUNTS` decimal fields | `period_review.read_schwab_realized` |
-| Positions | Mappings with `source_line`, `symbol`, `underlying`, `kind`, `is_option`, and nullable decimal fields `quantity`, `market_value`, `unrealized` | `portfolio_review.read_holdings` |
-
-Use `ROOT YYYY-MM-DD STRIKE C/P` consistently for option instruments and
-`ledger.OPTION_ACTIONS` for option opens and closes. Map asset kinds to the
-values used in `holdings_review` and keep each snapshot's date with its source.
-Validate the new broker's date, quantity, cash, and lot conventions against its
-own reports. Existing broker-derived evaluations are scoped to Schwab.
-
-### Schwab export coverage
-
-We have tested Schwab transaction history, realized gain/loss detail, and
-position snapshot CSV layouts. New data in the same layouts can be imported.
-Other Schwab layouts may need parser work for alternate headers, title or
-subtotal rows, missing fields, or account identifiers. Test each new format
-with redacted or synthetic fixtures and reconcile row counts and signed
-amounts before relying on it.
-
-Import new trades as ledger data. Once an export maps to the same ledger
-fields, its layout does not require retraining. Consider more SFT when a
-repeatable interpretation error survives fixes to the parser, ledger, or
-prompt. One candidate is confusing a close month with an option expiration.
-Turn the error into labeled question-to-filter examples and compare stock,
-the existing adapter, and the new adapter on a fresh holdout. Keep contracts
-or time periods separate between training and evaluation. Make a separate
-data-handling decision before using any real brokerage rows for cloud training.
-
-### Schwab example inputs
-
-| Schwab export | Fields used | Purpose |
-| --- | --- | --- |
-| Transaction history | Date, Action, Symbol, Description, Quantity, Price, Fees & Comm, Amount | Source transactions and reported cash |
-| Realized Gain/Loss detail | Symbol, Closed Date, Opened Date, Quantity, Gain/Loss, wash-sale flag | Independent broker lot and P&L comparison |
-| Positions snapshot | Symbol, signed quantity, snapshot date supplied via CLI | Open options quantity comparison |
-
-Use one continuous transaction export per account and align the scope and
-dates of the other exports. If a newer export contains all rows in an earlier
-one, use the newer file on its own.
+Load the file with **Load portfolio report** in the private Site. Try a
+built-in query, or ask for unrealized P&L and dividends across tickers covered
+by the report. The Site sends the question text to hosted Inkling. The JSON
+and calculated dollars stay in the browser. An L4 cold start can take several
+minutes. Coverage dates and unresolved records remain visible in the answer.
+
+`portfolio_review.py --config configs/portfolio-example.json` selects target
+symbols and evidence scopes. The CLI uses holdings underlyings by default.
+See the [broker import and reporting workflow](docs/workflow.md) for options
+and limitations.
+
+## Data handling
+
+Keep brokerage exports, derived reports, tax documents, private holdouts,
+and checkpoints outside Git. The historical commands use the ignored
+`private/` and `artifacts/` folders. The hosted model interprets queries.
+The ledger remains the source for calculations and unresolved status.
+
+Schwab is the first supported CSV integration. See [broker export coverage](docs/workflow.md#broker-integrations) and the [production ledger spec](PRODUCTION_LEDGER_SPEC.md).

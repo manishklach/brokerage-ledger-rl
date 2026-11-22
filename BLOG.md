@@ -63,15 +63,33 @@ For Inkling 2 Mini, I prepared 423 redacted training examples and held out 168 b
 
 ## What Inkling 2 Mini did on the GPU
 
-I ran **stock Inkling 2 Mini** on a Runpod B200. It got **42 out of 44** on the portfolio-routing regression set in that run. On the separate evidence benchmark, it got **99 out of 192** when citations had to be JSON integers. Accepting quoted numeric row IDs raised the score to **183 out of 192**. It made zero false confirmations on the 24 synthetic unverified-close cases.
+I ran stock Inkling 2 Mini on a Runpod B200. The
+[benchmark table](README.md#benchmarks) records both routing runs with
+their decoding settings. At the same 80-token cap used for Qwen, most
+Inkling responses were truncated. Giving Inkling more tokens and
+changing its reasoning effort was a separate run.
 
-That gap changed what I’d try next. Most strict-score misses came from output formatting, which is something I can address with a structured response or a narrow parser change before renting GPUs to tune weights. The benchmark also gave Inkling evidence the ledger had already classified, so it measures how well the model interprets and cites that evidence. The next test needs messier inputs, including partial quantities across months and competing lot allocations.
+The opening-evidence test exposed a formatting problem. Many replies
+identified the right rows and put quotation marks around the IDs. The
+exact scorer requires JSON integers, so those replies failed. I replayed
+the saved answers to isolate the citation-type errors. The benchmark
+gave Inkling evidence the ledger had already classified, so it measures
+interpretation and citation rather than retrieval from raw exports.
 
-I then built a targeted set of 400 synthetic training examples and 100 separate validation examples. I focused on three cases that matter when checking an options close: one opening row can cover a partial allocation, a required date can be missing, and several opening rows can add up to less than the requested quantity. I included exact fills and ambiguous allocations so the model could also practice when to support a claim and when to withhold it.
+I then built a targeted set of 400 synthetic training examples and 100
+separate validation examples. I focused on single-row partial
+allocations, missing dates, and quantity shortfalls, with exact fills
+and ambiguous allocations as controls.
 
-The first B200 rental spent its time unpacking the training image. A cheaper 96 GB RTX PRO 6000 Blackwell completed a LoRA step, reloaded the adapter, and finished a 12-step pilot. I saved checkpoints after steps 4, 8, and 12. On the same 100 synthetic validation examples, mean loss per expected answer token fell from 1.1473 for stock Inkling to 0.1638 at step 12.
-
-That gave me a checkpoint to test next. I still need to let stock Inkling and the adapter generate their own replies on untouched brokerage cases. I’ll count exact status and citation matches and check how often either model claims support when the opening evidence falls short.
+A 96 GB RTX PRO 6000 Blackwell completed the first LoRA step, reloaded
+the adapter, and finished the pilot. I selected step 12 solely by
+teacher-forced NLL. A drop after SFT is expected when the model scores
+known answers with the expected preceding tokens supplied. We attempted
+the paired generation test, hit repeated FlexAttention compilation, and
+ended the fixed-shape retry before any matched batch completed.
+[Part 2](BLOG_PART_2.md) explains the run and recovery. The
+[validation row in the benchmark table](README.md#benchmarks) gives
+the stock and all three checkpoint scores.
 
 ## What I want to build from here
 

@@ -59,22 +59,13 @@ Record the outcome by question ID and distinguish **answered**, **clarification
 needed**, and **missing input**. Set expected amounts and source rows locally
 before running a model. Keep portfolio values, trade IDs, expected answers,
 and model replies under `private/`. This document defines the benchmark
-questions and scoring criteria. It does not report a benchmark run.
+questions and scoring criteria. See the [canonical benchmark table](README.md#benchmarks) for results.
 
 ## First local evaluation
 
-Qwen3-8B with the existing supervised evidence adapter scored **27/40** over
-20 locally generated responses. The model received a question-specific
-evidence packet, so this measured answer synthesis rather than record
-retrieval. A reviewer checked numerical claims against the holdings snapshot
-and applied the rubric above.
-
-| Section | Score |
-| --- | ---: |
-| Portfolio and risk | 11/18 |
-| Positions and trades | 12/18 |
-| Tax reporting | 4/4 |
-| **Total** | **27/40** |
+Qwen3-8B with the supervised evidence adapter received a question-specific
+evidence packet. A reviewer checked its numerical claims against the
+holdings snapshot and applied the rubric above.
 
 Both tax answers earned credit for identifying unavailable source evidence.
 The run did not verify any tax amount. The main zero-credit failures were
@@ -87,12 +78,11 @@ holdings annex remain local.
 
 The December 2025 review and November 19, 2026 holdings snapshot supplied
 the reporting periods for this run. The two tax questions used the full 2025
-realized export. The scripted queries scored **33/40**. Seven answers were
+realized export. Seven answers were
 complete, seven had partial evidence, three needed clarification, and
 three identified missing inputs. Correct clarification or missing-input
 responses can earn full credit under the rubric.
 
 The run performed record lookup and calculations from local inputs for all
-20 query IDs. It used fixed question routing, so this score does not measure
-model interpretation of free-form portfolio questions or replace the
-27/40 model-synthesis result above.
+20 query IDs. It used fixed question routing. Its scope differs from the
+model synthesis run and free-form portfolio querying.

@@ -33,7 +33,7 @@ def summarize(rows):
         total = len(members)
         both_exact = sum(all(pair[v]["correct"] for v in VARIANTS) for pair in members)
         stats = {"cases": total, "both_exact": both_exact,
-                 "paired_accuracy": both_exact / total if total else None}
+                 "both_correct_rate": both_exact / total if total else None}
         for variant in VARIANTS:
             replies = [pair[variant] for pair in members]
             correct = sum(row["correct"] for row in replies)
@@ -52,7 +52,7 @@ def summarize(rows):
                 count = sum(row["predicted_status"] == "supported" for row in replies)
                 stats[variant].update(false_supports=count, false_support_rate=count / total if total else None)
         result["groups"][group] = stats
-    result["paired_accuracy"] = result["groups"]["supported"]["paired_accuracy"]
+    result["supported_both_correct_rate"] = result["groups"]["supported"]["both_correct_rate"]
     return result
 
 

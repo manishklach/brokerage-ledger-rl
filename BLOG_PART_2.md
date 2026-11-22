@@ -18,12 +18,7 @@ I saved the first checkpoint and resumed from it in a separate session. The pilo
 
 I ran stock Inkling and each adapter on the same 100 synthetic validation cases in the same runtime. Each variant was scored on the same 2,252 answer tokens.
 
-| Variant | Mean negative log likelihood per answer token |
-| --- | ---: |
-| Stock | 1.1473 |
-| Step 4 | 0.2941 |
-| Step 8 | 0.1801 |
-| Step 12 | 0.1638 |
+The [canonical benchmark table](README.md#benchmarks) gives the score for stock Inkling and each checkpoint.
 
 I selected step 12 by teacher-forced NLL alone. A drop after SFT is expected. The [scoring script](evaluate_inkling_validation_nll.py) records the loss for each checkpoint. The scoring pass provides the correct preceding tokens, so it measures how the model scores a known answer. An open-ended run has to generate the status and citations itself, where an early mistake can change everything that follows.
 
@@ -35,4 +30,4 @@ Stopping the pod freed the GPU but left the disk tied to its host. When the GPU 
 
 The hosted portfolio workspace still serves stock Inkling on an on-demand L4. It uses a query plan to identify tickers, metrics, and dates. The browser reads the report and computes the figures. The new adapter is a separate experiment in judging opening evidence. A matched benchmark on held-out broker cases is the test that will determine whether it improves that job.
 
-[Training recipes and reproduction details](README.md#inkling-lot-evidence-lora-on-one-rtx-pro-6000)
+[Training recipes and reproduction details](docs/training.md#inkling-lot-evidence-lora-on-one-rtx-pro-6000)
