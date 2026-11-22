@@ -157,7 +157,7 @@ def main():
         correct = Counter(case["scenario"] for case, row in zip(cases, replies, strict=True) if row["score"])
         result["by_scenario"] = {name: {"correct": correct[name], "total": total}
                                  for name, total in sorted(totals.items())}
-    if args.expanded_evidence or args.broker_evidence:
+    if evidence_eval:
         predictions = [lot_answer(row.get("reply", "")).get("status") for row in replies]
         targets = [row["target"] for row in replies]
         recalled = Counter(target for target, guess in zip(targets, predictions, strict=True) if target == guess)
