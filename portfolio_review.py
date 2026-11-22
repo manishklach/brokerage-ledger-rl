@@ -69,6 +69,20 @@ def realized_summary(rows):
     }
 
 
+def realized_position_extremes(rows):
+    groups = defaultdict(list)
+    for row in rows:
+        groups[row["instrument"]].append(row)
+    positions = [{"instrument": instrument, **realized_summary(lots)}
+                 for instrument, lots in sorted(groups.items())]
+    gains = max((position["realized"] for position in positions), default=ZERO)
+    losses = min((position["realized"] for position in positions), default=ZERO)
+    return {
+        "biggest_realized_gains": [p for p in positions if gains > ZERO and p["realized"] == gains],
+        "biggest_realized_losses": [p for p in positions if losses < ZERO and p["realized"] == losses],
+    }
+
+
 def holdings_review(rows, as_of, targets):
     securities = [r for r in rows if r["kind"] in {"Equity", "ETFs & Closed End Funds", "Option"}]
     options = [r for r in rows if r["is_option"]]
@@ -202,6 +216,7 @@ def answer_questions(monthly, annual, holdings, evidence_index, targets):
         18: answer("partial", tqqq, ("timestamped option bid and ask",)),
         19: answer("answered", {"period": str(monthly["year"]), "scope": "All realized lots in the supplied broker export",
                                 "annual_total": realized_summary(annual),
+                                "position_extremes": realized_position_extremes(annual),
                                 "by_underlying": tax}),
         20: answer("partial" if wash_flags else "answered",
                    {"period": str(monthly["year"]), "scope": "provided broker export",
