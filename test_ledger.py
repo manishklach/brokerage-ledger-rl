@@ -31,6 +31,17 @@ class LedgerTests(unittest.TestCase):
             "net_cash": "148.70",
         }])
 
+    def test_malformed_row_is_reported_and_later_rows_survive(self):
+        content = CSV.replace("0.65,-100.65", "0.65,bad")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.csv"
+            path.write_text(content, encoding="utf-8")
+            warnings = []
+            rows = read_export(path, diagnostics=warnings)
+        self.assertEqual([row.source_line for row in rows], [2, 4])
+        self.assertEqual(warnings, [{"file": "fixture.csv", "line": 3,
+                                     "reason": "invalid date or numeric field"}])
+
     def test_competing_leg_is_ambiguous(self):
         row = "10/02/2026,Buy to Open,DEMO 11/20/2026 90 P,,1,0.50,0.65,-50.65\n"
         report = self.report(CSV + row)

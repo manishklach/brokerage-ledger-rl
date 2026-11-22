@@ -6,10 +6,10 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import asdict
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 
-from ledger import number, read_export
+from ledger import number, read_export, realized_date, rejected_row, transaction_date
 from ledger_evidence import decide, recorded_claim
 from period_review import read_schwab_realized, review_lots
 from reconcile import contract, export_rows
@@ -23,23 +23,24 @@ def optional_number(value):
     return None if value.strip().upper() in {"", "-", "--", "N/A"} else number(value)
 
 
-def read_holdings(path):
+def read_holdings(path, *, diagnostics=None):
     with path.open(encoding="utf-8-sig") as source:
         header = source.readline()
     found = re.search(r"\b\d{4}[-/]\d{2}[-/]\d{2}\b", header)
     rows = []
-    for line, row in export_rows(path, HOLDINGS_FIELDS):
+    for line, row in export_rows(path, HOLDINGS_FIELDS, diagnostics=diagnostics):
         if row["Asset Type"] == "--":
             continue
-        option = contract(row["Symbol"]) if row["Asset Type"] == "Option" else None
-        if row["Asset Type"] == "Option" and option is None:
-            raise ValueError(f"Invalid option instrument at holdings row {line}")
         try:
+            option = contract(row["Symbol"]) if row["Asset Type"] == "Option" else None
+            if row["Asset Type"] == "Option" and option is None:
+                raise ValueError("Invalid option instrument")
             qty = optional_number(row["Qty (Quantity)"])
             mark = optional_number(row["Mkt Val (Market Value)"])
             gain = optional_number(row["Gain $ (Gain/Loss $)"])
-        except InvalidOperation as error:
-            raise ValueError(f"Invalid numeric field at holdings row {line}") from error
+        except (ArithmeticError, ValueError, AttributeError):
+            rejected_row(path, line, "invalid holdings instrument or numeric field", diagnostics)
+            continue
         rows.append({"source_line": line, "symbol": option or row["Symbol"],
                      "underlying": option.split()[0] if option else row["Symbol"],
                      "kind": row["Asset Type"], "quantity": qty,
@@ -151,7 +152,8 @@ def holdings_review(rows, as_of, targets):
     }
 
 
-def answer_questions(monthly, annual, holdings, evidence_index, targets):
+def answer_questions(monthly, annual, holdings, evidence_index, targets, query_config=None):
+    query_config = query_config or {}
     def answer(status, data=None, missing=()):
         return {"status": status, "data": data, "missing": list(missing)}
 
@@ -163,25 +165,30 @@ def answer_questions(monthly, annual, holdings, evidence_index, targets):
         return max((r for r in positions.get(ticker, {}).get("options", []) if r["market_value"] is not None),
                    key=lambda r: abs(r["market_value"]), default=None)
 
-    tqqq, xlk = largest("TQQQ"), largest("XLK")
-    soxl = positions.get("SOXL", {}).get("options", [])
+    first_target = next(iter(targets), None)
+    mark_option = largest(query_config.get("mark_ticker", first_target))
+    stress_option = largest(query_config.get("stress_ticker", first_target))
+    spread_options = positions.get(query_config.get("spread_ticker", first_target), {}).get("options", [])
     short_options = [r for r in holdings["target_rows"]
                      if r["is_option"] and r["quantity"] is not None and r["quantity"] < 0]
     potential = sorted(short_options, key=lambda row: abs(row["quantity"]) * Decimal(row["symbol"].split()[2]),
                        reverse=True)
     expiry = holdings["target_expirations"]
     largest_expiry = max(expiry, key=lambda day: expiry[day]["gross_mark"], default=None)
-    september_xlk = [r for r in evidence_index if r["month"] == "2026-09" and r["contract"].startswith("XLK ")]
-    indexed_closes = {"scope": "September 2026 evidence index", "matches": [
-        {key: r[key] for key in ("id", "contract", "close_lines")} for r in september_xlk
+    evidence_month = query_config.get("evidence_month", monthly["month"])
+    evidence_ticker = query_config.get("evidence_ticker", first_target)
+    indexed = [r for r in evidence_index if r["month"] == evidence_month
+               and (evidence_ticker is None or r["contract"].split()[0] == evidence_ticker)]
+    indexed_closes = {"scope": f"{evidence_month} evidence index", "matches": [
+        {key: r[key] for key in ("id", "contract", "close_lines")} for r in indexed
     ]}
-    if len(september_xlk) == 1:
-        indexed_closes["evidence"] = decide(*recorded_claim(september_xlk[0]))
-        september_answer = answer("answered", indexed_closes)
-    elif september_xlk:
-        september_answer = answer("clarification_needed", indexed_closes, ("intended contract or close ID",))
+    if len(indexed) == 1:
+        indexed_closes["evidence"] = decide(*recorded_claim(indexed[0]))
+        evidence_answer = answer("answered", indexed_closes)
+    elif indexed:
+        evidence_answer = answer("clarification_needed", indexed_closes, ("intended contract or close ID",))
     else:
-        september_answer = answer("missing_input", indexed_closes, ("verified full September close index",))
+        evidence_answer = answer("missing_input", indexed_closes, ("verified close index for the selected month",))
     tax = {root: realized_summary([r for r in annual if r["underlying"] == root]) for root in targets}
     wash_flags = [r for r in annual if r["underlying"] in targets and r["wash_sale_flag"]]
     return {
@@ -206,15 +213,15 @@ def answer_questions(monthly, annual, holdings, evidence_index, targets):
                               "total_mark": total(holdings["cash_mark_rows"], "market_value")},
                   ("available settled cash", "reported buying power", "deliverables", "broker margin inputs")),
         10: answer("answered", {"as_of": holdings["as_of"], "positions": positions}),
-        11: answer("partial", tqqq, ("opening fills, fees, and remaining-lot links for the current position",)),
-        12: answer("clarification_needed", soxl, ("intended spread and confirmed legs", "entry cash", "deliverables")),
-        13: answer("partial", xlk, ("spot", "scenario date", "volatility assumptions", "option pricing inputs")),
-        14: answer("clarification_needed", soxl, ("confirmed short leg and spread membership", "deliverables")),
+        11: answer("partial", mark_option, ("opening fills, fees, and remaining-lot links for the current position",)),
+        12: answer("clarification_needed", spread_options, ("intended spread and confirmed legs", "entry cash", "deliverables")),
+        13: answer("partial", stress_option, ("spot", "scenario date", "volatility assumptions", "option pricing inputs")),
+        14: answer("clarification_needed", spread_options, ("confirmed short leg and spread membership", "deliverables")),
         15: answer("missing_input", missing=("transaction and realized history through the holdings snapshot",
                                              "remaining-lot links for the partial close")),
-        16: answer("missing_input", missing=("order confirmations linking closing and opening TQQQ legs",)),
-        17: september_answer,
-        18: answer("partial", tqqq, ("timestamped option bid and ask",)),
+        16: answer("missing_input", missing=("order confirmations linking closing and opening legs",)),
+        17: evidence_answer,
+        18: answer("partial", mark_option, ("timestamped option bid and ask",)),
         19: answer("answered", {"period": str(monthly["year"]), "scope": "All realized lots in the supplied broker export",
                                 "annual_total": realized_summary(annual),
                                 "position_extremes": realized_position_extremes(annual),
@@ -227,15 +234,15 @@ def answer_questions(monthly, annual, holdings, evidence_index, targets):
     }
 
 
-def build_portfolio_report(transactions, realized_lots, positions, period, as_of, targets, index=()):
+def build_portfolio_report(transactions, realized_lots, positions, period, as_of, targets, index=(), *, date_basis="effective", query_config=None):
     """Analyze normalized records without reading broker exports."""
     year = period.year
     month_label = period.strftime("%Y-%m")
     transactions = list(transactions)
     positions = list(positions)
-    annual = review_lots(transactions, realized_lots, year)
+    annual = review_lots(transactions, realized_lots, year, date_basis=date_basis)
     lots = annual["broker_lots"]
-    month_lots = [r for r in lots if r["closed"].startswith(month_label + "-")]
+    month_lots = [r for r in lots if realized_date(r, date_basis).startswith(month_label + "-")]
     month = {
         "month": month_label, "year": year, "realized": realized_summary(month_lots),
         "by_underlying": dict(sorted(
@@ -246,12 +253,13 @@ def build_portfolio_report(transactions, realized_lots, positions, period, as_of
         "broker_lots": month_lots,
     }
     holdings = holdings_review(positions, as_of, targets)
-    answers = answer_questions(month, lots, holdings, index, targets)
-    year_transactions = [row for row in transactions if row.posted_date.year == year]
+    answers = answer_questions(month, lots, holdings, index, targets, query_config)
+    year_transactions = [row for row in transactions if transaction_date(row, date_basis).year == year]
     posted = [row.posted_date.isoformat() for row in year_transactions]
-    closed = [row["closed"] for row in lots]
+    closed = [realized_date(row, date_basis) for row in lots]
     return {
         "report_year": year,
+        "date_basis": date_basis,
         "coverage": {
             "transaction_posted_from": min(posted, default=None),
             "transaction_posted_through": max(posted, default=None),
@@ -266,33 +274,79 @@ def build_portfolio_report(transactions, realized_lots, positions, period, as_of
     }
 
 
+def read_portfolio_config(path):
+    config = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(config, dict) or set(config) - {"schema_version", "tickers", "queries", "month", "as_of"}:
+        raise ValueError("Invalid portfolio config fields")
+    if config.get("schema_version", 1) != 1:
+        raise ValueError("Unsupported portfolio config schema")
+    tickers = config.get("tickers", [])
+    ticker_pattern = r"[A-Z0-9][A-Z0-9./-]*"
+    if not isinstance(tickers, list) or not all(isinstance(t, str) and re.fullmatch(ticker_pattern, t)
+                                                for t in tickers):
+        raise ValueError("Config tickers must be a list of symbols")
+    queries = config.get("queries", {})
+    ticker_fields = {"mark_ticker", "spread_ticker", "stress_ticker", "evidence_ticker"}
+    if not isinstance(queries, dict) or set(queries) - ticker_fields - {"evidence_month"}:
+        raise ValueError("Invalid saved query fields")
+    if not all(isinstance(queries[name], str) and re.fullmatch(ticker_pattern, queries[name])
+               for name in queries.keys() & ticker_fields):
+        raise ValueError("Invalid saved query ticker")
+    for name, value in (("month", config.get("month")), ("evidence_month", queries.get("evidence_month"))):
+        if value is not None:
+            if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}", value):
+                raise ValueError(f"{name} must use YYYY-MM")
+            date.fromisoformat(value + "-01")
+    if "as_of" in config:
+        if not isinstance(config["as_of"], str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", config["as_of"]):
+            raise ValueError("as_of must use YYYY-MM-DD")
+        date.fromisoformat(config["as_of"])
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("transactions", type=Path)
     parser.add_argument("realized", type=Path)
     parser.add_argument("holdings", type=Path)
-    parser.add_argument("--month", required=True)
-    parser.add_argument("--as-of", required=True, type=date.fromisoformat)
-    parser.add_argument("--tickers", nargs="+", default=["TQQQ", "SOXL", "XLK"])
+    parser.add_argument("--month")
+    parser.add_argument("--as-of", type=date.fromisoformat)
+    parser.add_argument("--tickers", nargs="+")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--date-basis", choices=("effective", "posted"), default="effective")
     parser.add_argument("--evidence-index", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    diagnostics = []
     try:
-        period = date.fromisoformat(args.month + "-01")
-    except ValueError:
-        parser.error("--month must use YYYY-MM")
-    as_of, positions = read_holdings(args.holdings)
-    if as_of is not None and as_of != args.as_of:
-        parser.error("--as-of disagrees with the holdings export date")
+        config = read_portfolio_config(args.config) if args.config else {}
+        month = args.month or config.get("month")
+        if not month:
+            parser.error("Provide --month or a config month")
+        period = date.fromisoformat(month + "-01")
+        export_date, positions = read_holdings(args.holdings, diagnostics=diagnostics)
+        as_of = args.as_of or (date.fromisoformat(config["as_of"]) if "as_of" in config else export_date)
+        if as_of is None:
+            parser.error("Provide --as-of or a dated holdings export")
+        if export_date is not None and export_date != as_of:
+            parser.error("--as-of or the configured date disagrees with the holdings export")
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     index = json.loads(args.evidence_index.read_text(encoding="utf-8")) if args.evidence_index else []
+    if args.tickers is not None:
+        targets = args.tickers
+    else:
+        targets = config.get("tickers", sorted({row["underlying"] for row in positions}))
     report = {
         "sources": {"transactions": args.transactions.name, "realized": args.realized.name,
                     "holdings": args.holdings.name},
         **build_portfolio_report(
-            read_export(args.transactions), read_schwab_realized(args.realized), positions,
-            period, args.as_of, args.tickers, index,
+            read_export(args.transactions, diagnostics=diagnostics),
+            read_schwab_realized(args.realized, diagnostics=diagnostics), positions,
+            period, as_of, targets, index, date_basis=args.date_basis, query_config=config.get("queries"),
         ),
     }
+    report.update(warning_count=len(diagnostics), warnings=diagnostics)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
 

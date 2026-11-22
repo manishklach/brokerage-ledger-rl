@@ -8,7 +8,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
-from ledger import OPTION_ACTIONS, Transaction, read_export
+from ledger import OPTION_ACTIONS, Transaction, read_export, transaction_date, validate_date_basis
 
 CENT = Decimal("0.01")
 CANCELLATION_SIDE = {"Cancel Buy to Open": "buy", "Cancel Sell to Open": "sell"}
@@ -32,8 +32,7 @@ def allocate(amount: Decimal, quantity: Decimal, before: Decimal, after: Decimal
 
 def match_options(rows: list[Transaction], month: str | None, *, newest_first: bool = False,
                   date_basis: str = "effective") -> dict:
-    if date_basis not in {"posted", "effective"}:
-        raise ValueError("date_basis must be posted or effective")
+    validate_date_basis(date_basis)
     contracts = defaultdict(list)
     for row in rows:
         if len(row.symbol.split()) == 4 and row.symbol.split()[-1] in {"C", "P"}:
@@ -41,32 +40,50 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
 
     closes = []
     other_events = []
+    unresolved = defaultdict(list)
     for symbol, events in contracts.items():
         lots = {"buy": deque(), "sell": deque()}
         blockers = {"buy": [], "sell": []}
+        quarantined = []
         for row in sorted(events, key=lambda x: (x.effective_date, -x.source_line)):
-            report_date = row.effective_date if date_basis == "effective" else row.posted_date
+            report_date = transaction_date(row, date_basis)
             in_month = month is None or report_date.isoformat()[:7] == month
             if row.action not in OPTION_ACTIONS:
+                event = {"line": row.source_line, "action": row.action, "contract": symbol}
+                side = CANCELLATION_SIDE.get(row.action)
                 if row.action in SETTLEMENT_ACTIONS and row.quantity:
-                    affected_side = "buy" if row.quantity < 0 else "sell"
-                    queue = lots[affected_side]
+                    side = "buy" if row.quantity < 0 else "sell"
+                    queue = lots[side]
                     quantity = abs(row.quantity)
-                    remaining = sum(abs(lot.row.quantity) - lot.used for lot in queue)
-                    if not blockers[affected_side] and quantity == remaining:
-                        queue.clear()
-                    elif not blockers[affected_side] and len(queue) == 1 and quantity < remaining:
-                        lot = queue[0]
-                        lot.used += quantity
-                        lot.settlement_lines.append(row.source_line)
+                    known = sum(abs(lot.row.quantity) - lot.used for lot in queue)
+                    if blockers[side] or quantity > known:
+                        event["reason"] = "prior_inventory_blocker" if blockers[side] else "insufficient_settlement_inventory"
                     else:
-                        blockers[affected_side].append(row.source_line)
+                        event.update(allocation_basis="fifo", allocations=[])
+                        while quantity:
+                            lot = queue[0]
+                            opened = abs(lot.row.quantity)
+                            matched = min(quantity, opened - lot.used)
+                            open_cash = allocate(lot.row.amount, opened, lot.used, lot.used + matched)
+                            event["allocations"].append({"open_line": lot.row.source_line,
+                                                         "quantity": str(matched), "open_cash": str(open_cash)})
+                            lot.used += matched
+                            quantity -= matched
+                            lot.settlement_lines.append(row.source_line)
+                            if lot.used == opened:
+                                queue.popleft()
                 else:
-                    affected = (CANCELLATION_SIDE[row.action],) if row.action in CANCELLATION_SIDE else blockers
-                    for affected_side in affected:
-                        blockers[affected_side].append(row.source_line)
+                    event["reason"] = ("unresolved_cancellation" if side else
+                                       "missing_settlement_quantity" if row.action in SETTLEMENT_ACTIONS else
+                                       "unsupported_option_event")
+                if "reason" in event:
+                    unresolved[symbol].append({**event, "side": side})
+                    if side:
+                        blockers[side].append(row.source_line)
+                    else:
+                        quarantined.append(row.source_line)
                 if in_month:
-                    other_events.append({"line": row.source_line, "action": row.action, "contract": symbol})
+                    other_events.append(event)
                 continue
 
             phase, side = OPTION_ACTIONS[row.action]
@@ -74,6 +91,8 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
             inventory_blockers = blockers[inventory_side]
             if not row.quantity or row.amount is None:
                 inventory_blockers.append(row.source_line)
+                unresolved[symbol].append({"line": row.source_line, "action": row.action,
+                                           "side": inventory_side, "reason": "invalid_trade_quantity_or_cash"})
             if phase == "open":
                 if not inventory_blockers:
                     lots[side].append(Lot(row))
@@ -88,6 +107,8 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
                 "matches": [],
                 "provisional_pnl": None,
             }
+            if quarantined:
+                result["quarantined_event_lines"] = list(quarantined)
             if inventory_blockers:
                 result.update(status="unsupported_contract_event", blocking_lines=sorted(set(inventory_blockers)))
             else:
@@ -113,6 +134,7 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
                     })
                     if lot.settlement_lines:
                         result["matches"][-1]["prior_settlement_lines"] = list(lot.settlement_lines)
+                        result["matches"][-1]["prior_settlement_basis"] = "fifo"
                     pnl += open_cash + close_cash
                     remaining -= matched
                     lot.used += matched
@@ -137,9 +159,11 @@ def match_options(rows: list[Transaction], month: str | None, *, newest_first: b
             ("LIFO" if newest_first else "FIFO") + " by effective date; reverse CSV row order breaks ties",
             "Earlier closes consume lots, including previously reported months",
             "Cash uses the reported Amount and includes no second fee deduction",
-            "Contract events such as splits, cancellations, assignment and exercise require review",
+            "Settlements consume known inventory in FIFO order",
+            "Quarantined events may affect the reliability of later provisional results",
         ],
         "closes": closes,
+        "unresolved_contracts": dict(sorted(unresolved.items())),
         "other_option_events": sorted(other_events, key=lambda x: x["line"]),
     }
 

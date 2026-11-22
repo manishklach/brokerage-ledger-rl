@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from ledger import cash_total, number, parse_date, read_export
+from ledger import realized_date, rejected_row, transaction_date, validate_date_basis
 from option_lots import match_options
 from reconcile import compare_close_groups, contract, export_rows
 
@@ -79,27 +80,33 @@ def link_broker_lots(transactions, lots, first_effective):
                                     "transaction_lines": [row.source_line for row in candidates]}
 
 
-def read_schwab_realized(realized_path, *, year=None):
-    for line, row in export_rows(realized_path, FIELDS):
-        closed = parse_date(row["Closed Date"])
-        if year is not None and closed.year != year:
+def read_schwab_realized(realized_path, *, year=None, date_basis="effective", diagnostics=None):
+    validate_date_basis(date_basis)
+    for line, row in export_rows(realized_path, FIELDS, diagnostics=diagnostics):
+        try:
+            closed = parse_date(row["Closed Date"])
+            opened = parse_date(row["Opened Date"])
+            transaction_closed = parse_date(row.get("Transaction Closed Date") or row["Closed Date"])
+            if year is not None and (transaction_closed if date_basis == "effective" else closed).year != year:
+                continue
+            option = contract(row["Symbol"])
+            underlying = option.split()[0] if option else row["Symbol"]
+            quantity = number(row["Quantity"])
+            if quantity is None or not quantity:
+                raise ValueError(f"Missing realized quantity on broker source line {line}")
+            amounts = {
+                "proceeds": number(row["Proceeds"]), "broker_basis": number(row["Cost Basis (CB)"]),
+                "realized": number(row["Gain/Loss ($)"]),
+                "short_term": number(row["Short Term Gain/Loss"]) or Decimal(0),
+                "long_term": number(row["Long Term Gain/Loss"]) or Decimal(0),
+                "disallowed_loss_reported": number(row["Disallowed Loss"]) or Decimal(0),
+            }
+            if any(value is None for value in amounts.values()):
+                raise ValueError(f"Missing realized dollars on broker source line {line}")
+        except (ArithmeticError, ValueError, AttributeError) as error:
+            reason = str(error) if str(error).startswith("Missing realized") else "invalid realized date, instrument, or numeric field"
+            rejected_row(realized_path, line, reason, diagnostics)
             continue
-        opened = parse_date(row["Opened Date"])
-        transaction_closed = parse_date(row.get("Transaction Closed Date") or row["Closed Date"])
-        option = contract(row["Symbol"])
-        underlying = option.split()[0] if option else row["Symbol"]
-        quantity = number(row["Quantity"])
-        if quantity is None or not quantity:
-            raise ValueError(f"Missing realized quantity on broker source line {line}")
-        amounts = {
-            "proceeds": number(row["Proceeds"]), "broker_basis": number(row["Cost Basis (CB)"]),
-            "realized": number(row["Gain/Loss ($)"]),
-            "short_term": number(row["Short Term Gain/Loss"]) or Decimal(0),
-            "long_term": number(row["Long Term Gain/Loss"]) or Decimal(0),
-            "disallowed_loss_reported": number(row["Disallowed Loss"]) or Decimal(0),
-        }
-        if any(value is None for value in amounts.values()):
-            raise ValueError(f"Missing realized dollars on broker source line {line}")
         yield {
             "broker_source_line": line, "underlying": underlying, "instrument": option or row["Symbol"],
             "is_option": option is not None, "quantity": abs(quantity), "opened": opened.isoformat(),
@@ -109,11 +116,13 @@ def read_schwab_realized(realized_path, *, year=None):
         }
 
 
-def review(transactions, realized_path, year):
-    return review_lots(transactions, read_schwab_realized(realized_path), year)
+def review(transactions, realized_path, year, *, date_basis="effective"):
+    return review_lots(transactions, read_schwab_realized(realized_path), year, date_basis=date_basis)
 
 
-def review_lots(transactions, realized_lots, year):
+def review_lots(transactions, realized_lots, year, *, date_basis="effective"):
+    validate_date_basis(date_basis)
+    transactions = list(transactions)
     prefix = str(year)
     first_posted = min((row.posted_date.isoformat() for row in transactions), default=None)
     first_effective = min((row.effective_date for row in transactions), default=None)
@@ -123,9 +132,10 @@ def review_lots(transactions, realized_lots, year):
     issues = defaultdict(list)
     comparison_lots = defaultdict(list)
     for lot in realized_lots:
-        comparison_lots[(lot.get("transaction_closed") or lot["closed"])[:7]].append(lot)
-        if not lot["closed"].startswith(prefix + "-"):
+        closed = realized_date(lot, date_basis)
+        if not closed.startswith(prefix + "-"):
             continue
+        comparison_lots[closed[:7]].append(lot)
         line = lot["broker_source_line"]
         underlying = lot["underlying"]
         amounts = {field: lot[field] for field in (
@@ -155,22 +165,29 @@ def review_lots(transactions, realized_lots, year):
 
     link_broker_lots(transactions, details, first_effective)
     closes_by_month = defaultdict(list)
-    for close in match_options(transactions, None)["closes"]:
-        closes_by_month[close["effective_date"][:7]].append(close)
+    for close in match_options(transactions, None, date_basis=date_basis)["closes"]:
+        closes_by_month[close[date_basis + "_date"][:7]].append(close)
     transactions_by_month = defaultdict(list)
     for row in transactions:
-        transactions_by_month[row.posted_date.isoformat()[:7]].append(row)
+        transactions_by_month[transaction_date(row, date_basis).isoformat()[:7]].append(row)
     monthly = {}
     for month in range(1, 13):
         label = f"{prefix}-{month:02d}"
         rows = transactions_by_month[label]
-        groups = compare_close_groups(closes_by_month[label], comparison_lots[label], label)
+        groups = compare_close_groups(closes_by_month[label], comparison_lots[label], label, date_basis=date_basis)
         monthly[label] = {
             "transaction_rows": len(rows), "net_transaction_cash": cash_total(rows),
             "option_close_comparison": groups,
+            "reported_amounts": {
+                field: sum((lot[field] for lot in comparison_lots[label]), Decimal(0))
+                for field in totals["year"]
+            },
         }
+    for field, annual in totals["year"].items():
+        if sum(view["reported_amounts"][field] for view in monthly.values()) != annual:
+            raise ValueError(f"Monthly {field} totals disagree with annual report for {year}")
     return {
-        "year": year,
+        "year": year, "date_basis": date_basis,
         "source_scope": {"first_posted": first_posted, "last_posted": last_posted,
                          "first_effective": first_effective.isoformat() if first_effective else None},
         "broker_lots_by_term": Counter(row["term"] for row in details),
@@ -189,8 +206,9 @@ def main():
     parser.add_argument("realized", type=Path)
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--date-basis", choices=("effective", "posted"), default="effective")
     args = parser.parse_args()
-    report = review(read_export(args.transactions), args.realized, args.year)
+    report = review(read_export(args.transactions), args.realized, args.year, date_basis=args.date_basis)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
 

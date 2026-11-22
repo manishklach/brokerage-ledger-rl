@@ -9,6 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
+from warnings import warn
 
 HEADERS = ("Date", "Action", "Symbol", "Description", "Quantity", "Price", "Fees & Comm", "Amount")
 OPTION_ACTIONS = {
@@ -17,6 +18,21 @@ OPTION_ACTIONS = {
     "Buy to Close": ("close", "buy"),
     "Sell to Close": ("close", "sell"),
 }
+
+
+def validate_date_basis(date_basis):
+    if date_basis not in {"posted", "effective"}:
+        raise ValueError("date_basis must be posted or effective")
+
+
+def transaction_date(row, date_basis):
+    return row.effective_date if date_basis == "effective" else row.posted_date
+
+
+def realized_date(lot, date_basis):
+    if date_basis == "effective":
+        return lot.get("transaction_closed") or lot["closed"]
+    return lot["closed"]
 
 
 def parse_date(value: str) -> date:
@@ -52,7 +68,14 @@ class Transaction:
     amount: Decimal | None
 
 
-def read_export(path: Path) -> list[Transaction]:
+def rejected_row(path, line, reason, diagnostics):
+    if diagnostics is None:
+        warn(f"{path.name}:{line}: {reason}", stacklevel=3)
+    else:
+        diagnostics.append({"file": path.name, "line": line, "reason": reason})
+
+
+def read_export(path: Path, *, diagnostics: list[dict] | None = None) -> list[Transaction]:
     transactions = []
     with path.open(encoding="utf-8-sig", newline="") as source:
         reader = csv.reader(source, strict=True)
@@ -65,13 +88,18 @@ def read_export(path: Path) -> list[Transaction]:
             raise ValueError("Missing or duplicate Schwab transaction header columns")
         while True:
             line = reader.line_num + 1
-            row = next(reader, None)
+            try:
+                row = next(reader, None)
+            except csv.Error:
+                rejected_row(path, line, "invalid CSV record", diagnostics)
+                continue
             if row is None:
                 break
             if not row or not any(cell.strip() for cell in row):
                 continue
             if len(row) != len(header):
-                raise ValueError(f"Line {line}: expected {len(header)} columns")
+                rejected_row(path, line, f"expected {len(header)} columns", diagnostics)
+                continue
             row = [row[column] for column in columns]
             posted, _, effective = row[0].strip().partition(" as of ")
             try:
@@ -80,8 +108,8 @@ def read_export(path: Path) -> list[Transaction]:
                     *(value.strip() for value in row[1:4]),
                     *(number(value) for value in row[4:]),
                 ))
-            except (ArithmeticError, ValueError) as error:
-                raise ValueError(f"Line {line}: invalid date or numeric field") from error
+            except (ArithmeticError, ValueError):
+                rejected_row(path, line, "invalid date or numeric field", diagnostics)
     return transactions
 
 
@@ -89,8 +117,9 @@ def cash_total(transactions: Iterable[Transaction]) -> Decimal:
     return sum((row.amount for row in transactions if row.amount is not None), Decimal("0.00"))
 
 
-def spread_candidates(transactions: list[Transaction]) -> tuple[list[dict], list[int]]:
+def spread_candidates(transactions: list[Transaction], *, date_basis="effective") -> tuple[list[dict], list[int]]:
     """Return mutually unique vertical candidates and ambiguous source lines."""
+    validate_date_basis(date_basis)
     buckets = defaultdict(lambda: {"buy": [], "sell": []})
     for row in transactions:
         if row.action not in OPTION_ACTIONS or not row.quantity:
@@ -100,7 +129,7 @@ def spread_candidates(transactions: list[Transaction]) -> tuple[list[dict], list
             continue
         root, expiry, strike, option_type = parts
         phase, side = OPTION_ACTIONS[row.action]
-        buckets[(row.effective_date, phase, root, expiry, option_type, abs(row.quantity))][side].append(
+        buckets[(transaction_date(row, date_basis), phase, root, expiry, option_type, abs(row.quantity))][side].append(
             (row, number(strike))
         )
 
@@ -120,7 +149,7 @@ def spread_candidates(transactions: list[Transaction]) -> tuple[list[dict], list
                 ambiguous.update(lines)
                 continue
             candidates.append({
-                "effective_date": key[0].isoformat(),
+                date_basis + "_date": key[0].isoformat(),
                 "phase": key[1],
                 "source_lines": sorted(lines),
                 "net_cash": (
@@ -132,12 +161,14 @@ def spread_candidates(transactions: list[Transaction]) -> tuple[list[dict], list
     return sorted(candidates, key=lambda item: item["source_lines"]), sorted(ambiguous)
 
 
-def audit(transactions: list[Transaction]) -> dict:
+def audit(transactions: list[Transaction], *, date_basis="effective") -> dict:
+    validate_date_basis(date_basis)
     groups = defaultdict(list)
     for row in transactions:
         groups[row.action].append(row)
-    spreads, ambiguous = spread_candidates(transactions)
+    spreads, ambiguous = spread_candidates(transactions, date_basis=date_basis)
     return {
+        "date_basis": date_basis,
         "transaction_count": len(transactions),
         "first_posted_date": min((row.posted_date.isoformat() for row in transactions), default=None),
         "last_posted_date": max((row.posted_date.isoformat() for row in transactions), default=None),
@@ -157,8 +188,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv", type=Path)
     parser.add_argument("--output", type=Path, help="Write the private audit JSON to this path")
+    parser.add_argument("--date-basis", choices=("effective", "posted"), default="effective")
     args = parser.parse_args()
-    report = json.dumps(audit(read_export(args.csv)), indent=2)
+    diagnostics = []
+    report_data = audit(read_export(args.csv, diagnostics=diagnostics), date_basis=args.date_basis)
+    report_data.update(warning_count=len(diagnostics), warnings=diagnostics)
+    report = json.dumps(report_data, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report + "\n", encoding="utf-8")

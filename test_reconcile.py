@@ -23,7 +23,7 @@ class ReconciliationTests(unittest.TestCase):
             csv.writer(file).writerows(rows)
         return path
 
-    def test_effective_month_uses_broker_trade_date_and_preserves_tax_year(self):
+    def test_december_close_posted_in_january_reconciles_in_both_date_bases(self):
         symbol = self.symbol
         rows = read_export(self.csv("transactions.csv", [
             ["Transaction history"], HEADERS,
@@ -46,10 +46,15 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(realized_comparison(rows, lots, "2026-01")["groups"], [])
         dec = review(rows, lots, 2025)
         self.assertEqual(dec["monthly"]["2025-12"]["option_close_comparison"]["groups"], [group])
-        self.assertEqual(dec["broker_lots"], [])
-        jan = review(rows, lots, 2026)
+        self.assertEqual(dec["reported_amounts"]["year"]["realized"], Decimal(50))
+        self.assertEqual(dec["monthly"]["2025-12"]["reported_amounts"]["realized"], Decimal(50))
+        self.assertEqual(dec["broker_lots"][0]["open_evidence"]["status"], "single_row_partial")
+        self.assertEqual(review(rows, lots, 2026)["broker_lots"], [])
+        jan = review(rows, lots, 2026, date_basis="posted")
         self.assertEqual(jan["reported_amounts"]["year"]["realized"], Decimal(50))
-        self.assertEqual(jan["broker_lots"][0]["open_evidence"]["status"], "single_row_partial")
+        self.assertEqual(jan["monthly"]["2026-01"]["reported_amounts"]["realized"], Decimal(50))
+        self.assertEqual(len(jan["monthly"]["2026-01"]["option_close_comparison"]["groups"]), 1)
+        self.assertEqual(review(rows, lots, 2025, date_basis="posted")["broker_lots"], [])
         self.assertIsNone(review([], lots, 2026)["source_scope"]["first_effective"])
 
     def test_holdings_reports_missing_quantities_without_counting_ties(self):

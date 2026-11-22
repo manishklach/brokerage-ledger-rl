@@ -12,6 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 
 [project.scripts]
+ledger-review = "ledger_review:main"
 brokerage-ledger = "ledger:main"
 brokerage-reconcile = "reconcile:main"
 brokerage-period-review = "period_review:main"
@@ -22,6 +23,7 @@ py-modules = [
     "close_filters",
     "ledger",
     "ledger_evidence",
+    "ledger_review",
     "lot_pilot_data",
     "option_lots",
     "period_review",

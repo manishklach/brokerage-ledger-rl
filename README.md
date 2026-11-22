@@ -455,11 +455,29 @@ private. The command above works independently of access to the workspace.
 
 ## Monthly portfolio review
 
-Monthly transaction counts and cash use the posted month. Option close
-comparisons instead use the transaction's effective date and the broker's
-Transaction Closed Date when supplied, falling back to Closed Date. Annual
-broker-reported totals still use Closed Date. A close at a month boundary
-can therefore appear under different months in these views.
+The ledger defaults to effective dates for cash buckets, modeled closes,
+and broker realized totals. Use `--date-basis posted` for the posted view.
+The effective view uses Transaction Closed Date when the broker supplies
+it and falls back to Closed Date. Both source dates remain in the report.
+Reported realized amounts are reconciled across all months and the year.
+
+`portfolio_review.py --config configs/portfolio-example.json` selects the
+example's tickers and evidence scope. Without a config or `--tickers`,
+the CLI uses the holdings underlyings. The numbered answers remain
+compatible with the existing Site.
+
+Install the project and run a read-only audit with the unified CLI:
+
+```bash
+python -m pip install .
+ledger-review transactions.csv --realized realized.csv --year 2026 --date-basis effective --format json --output ledger-report.json
+```
+
+The CLI exits with 0 for a clean report, 1 for unresolved evidence or
+rejected rows, and 2 for invalid input. It records source hashes and row
+counts, refuses output paths inside a private directory or over a source
+export, and writes the report atomically. Choose an existing output
+directory that you control because the report contains financial data.
 
 The `option_lots.py` CLI and Python `match_options()` API use the effective
 month by default. Pass `--date-basis posted` in the CLI or

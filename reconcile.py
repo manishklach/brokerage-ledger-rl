@@ -8,7 +8,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from ledger import number, parse_date, read_export
+from ledger import number, parse_date, read_export, realized_date, rejected_row, transaction_date, validate_date_basis
 from option_lots import match_options
 
 
@@ -21,51 +21,67 @@ def contract(symbol):
     return f"{root} {expiry_date} {number(strike).normalize():f} {right}"
 
 
-def export_rows(path, required):
+def export_rows(path, required, *, diagnostics=None):
     with path.open(encoding="utf-8-sig", newline="") as source:
         reader = csv.reader(source, strict=True)
         for row in reader:
-            if required <= set(row):
+            if len(row) == len(set(row)) and required <= set(row):
                 header = row
                 break
         else:
             raise ValueError(f"Missing required export columns: {sorted(required)}")
         while True:
             line = reader.line_num + 1
-            row = next(reader, None)
+            try:
+                row = next(reader, None)
+            except csv.Error:
+                rejected_row(path, line, "invalid CSV record", diagnostics)
+                continue
             if row is None:
                 return
             if not any(row) or not row[0].strip():
                 continue
             if len(row) != len(header):
-                raise ValueError(f"Unexpected column count at source line {line}")
+                rejected_row(path, line, f"expected {len(header)} columns", diagnostics)
+                continue
             yield line, dict(zip(header, row, strict=True))
 
 
-def realized_comparison(transactions, path, month):
+def realized_comparison(transactions, path, month, *, date_basis="effective"):
     required = {"Symbol", "Closed Date", "Opened Date", "Quantity", "Gain/Loss ($)", "Wash Sale?"}
-    lots = (
-        {"instrument": contract(row["Symbol"]), "closed": parse_date(row["Closed Date"]).isoformat(),
-         "broker_source_line": line, "opened": parse_date(row["Opened Date"]).isoformat(),
-         "transaction_closed": parse_date(row.get("Transaction Closed Date") or row["Closed Date"]).isoformat(),
-         "quantity": abs(number(row["Quantity"])), "realized": number(row["Gain/Loss ($)"]),
-         "wash_sale_flag": row["Wash Sale?"].strip().lower() == "yes"}
-        for line, row in export_rows(path, required)
-        if contract(row["Symbol"])
-    )
-    return compare_realized_lots(transactions, lots, month)
+    lots = []
+    for line, row in export_rows(path, required):
+        try:
+            instrument = contract(row["Symbol"])
+            if instrument is None:
+                continue
+            quantity = number(row["Quantity"])
+            realized = number(row["Gain/Loss ($)"])
+            if quantity is None or realized is None:
+                raise ValueError("Missing quantity or realized amount")
+            lots.append({
+                "instrument": instrument, "closed": parse_date(row["Closed Date"]).isoformat(),
+                "broker_source_line": line, "opened": parse_date(row["Opened Date"]).isoformat(),
+                "transaction_closed": parse_date(row.get("Transaction Closed Date") or row["Closed Date"]).isoformat(),
+                "quantity": abs(quantity), "realized": realized,
+                "wash_sale_flag": row["Wash Sale?"].strip().lower() == "yes",
+            })
+        except (ArithmeticError, ValueError, AttributeError):
+            rejected_row(path, line, "invalid realized date, instrument, or numeric field", None)
+    return compare_realized_lots(transactions, lots, month, date_basis=date_basis)
 
 
-def compare_realized_lots(transactions, lots, month):
-    modeled = match_options(transactions, None)["closes"]
-    return compare_close_groups(modeled, lots, month)
+def compare_realized_lots(transactions, lots, month, *, date_basis="effective"):
+    modeled = match_options(transactions, None, date_basis=date_basis)["closes"]
+    return compare_close_groups(modeled, lots, month, date_basis=date_basis)
 
 
-def compare_close_groups(closes, lots, month):
+def compare_close_groups(closes, lots, month, *, date_basis="effective"):
+    validate_date_basis(date_basis)
     modeled = defaultdict(list)
     broker = defaultdict(list)
     for lot in lots:
-        closed = lot.get("transaction_closed") or lot["closed"]
+        closed = realized_date(lot, date_basis)
         if lot["instrument"] and lot.get("is_option", True) and closed.startswith(month + "-"):
             broker[lot["instrument"], closed].append({
                 "line": lot["broker_source_line"], "opened": lot["opened"],
@@ -73,8 +89,9 @@ def compare_close_groups(closes, lots, month):
                 "wash_sale": lot["wash_sale_flag"],
             })
     for row in closes:
-        if row["effective_date"].startswith(month + "-"):
-            modeled[contract(row["contract"]), row["effective_date"]].append(row)
+        closed = row[date_basis + "_date"]
+        if closed.startswith(month + "-"):
+            modeled[contract(row["contract"]), closed].append(row)
 
     items = []
     for (symbol, closed), ledger_rows in sorted(modeled.items()):
@@ -86,13 +103,14 @@ def compare_close_groups(closes, lots, month):
                 shares_by_date[part["open_effective_date"]] += Decimal(part["quantity"])
         for row in broker_rows:
             broker_by_date[row["opened"]] += row["quantity"]
+        quarantined_lines = sorted({line for row in ledger_rows for line in row.get("quarantined_event_lines", ())})
         complete = all(row["provisional_pnl"] is not None for row in ledger_rows)
         trader_pnl = sum(Decimal(row["provisional_pnl"]) for row in ledger_rows) if complete else None
         broker_pnl = sum(row["pnl"] for row in broker_rows) if broker_rows else None
         same_quantity = sum(shares_by_date.values()) == sum(broker_by_date.values())
         if not broker_rows:
             status = "no_same_date_broker_group"
-        elif not complete:
+        elif not complete or quarantined_lines:
             status = "unresolved_ledger"
         elif not same_quantity:
             status = "quantity_difference"
@@ -111,6 +129,8 @@ def compare_close_groups(closes, lots, month):
             "ledger_pnl": trader_pnl, "broker_pnl": broker_pnl,
             "broker_wash_sale_flag": any(r["wash_sale"] for r in broker_rows),
         })
+        if quarantined_lines:
+            items[-1]["quarantined_event_lines"] = quarantined_lines
     return {
         "by_status": Counter(row["status"] for row in items),
         "broker_option_lot_rows": sum(len(row["broker_lines"]) for row in items) + sum(map(len, broker.values())),
@@ -122,7 +142,8 @@ def compare_close_groups(closes, lots, month):
     }
 
 
-def holdings_comparison(transactions, path, as_of):
+def holdings_comparison(transactions, path, as_of, *, date_basis="effective"):
+    validate_date_basis(date_basis)
     ledger_positions = defaultdict(Decimal)
     snapshot = defaultdict(Decimal)
     issues = defaultdict(list)
@@ -130,7 +151,7 @@ def holdings_comparison(transactions, path, as_of):
     sell = {"Sell to Open", "Sell to Close", "Cancel Buy to Open"}
     signed = {"Expired", "Assigned", "Exchange or Exercise", "Options Frwd Split", "Journal"}
     for row in transactions:
-        if row.posted_date > as_of:
+        if transaction_date(row, date_basis) > as_of:
             continue
         symbol = contract(row.symbol)
         if symbol is None:
@@ -182,11 +203,12 @@ def main():
     parser.add_argument("--month", required=True)
     parser.add_argument("--as-of", required=True, type=date.fromisoformat)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--date-basis", choices=("effective", "posted"), default="effective")
     args = parser.parse_args()
     rows = read_export(args.transactions)
     report = {
-        "realized": realized_comparison(rows, args.realized, args.month),
-        "holdings": holdings_comparison(rows, args.holdings, args.as_of),
+        "realized": realized_comparison(rows, args.realized, args.month, date_basis=args.date_basis),
+        "holdings": holdings_comparison(rows, args.holdings, args.as_of, date_basis=args.date_basis),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
