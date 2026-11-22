@@ -713,7 +713,22 @@ log likelihood per answer token.
 | Step 8 | 0.1801 |
 | Step 12 | 0.1638 |
 
-This score measures probability assigned to the expected answer tokens.
+This is **teacher-forced negative log likelihood**. Step 12 was chosen
+solely by this metric, with the expected preceding tokens supplied.
+Lower NLL after SFT is expected. The table supplies no generated-answer
+accuracy, status-recall, or false-support result.
+
+Reproduce the table from the pinned AutoModel checkout after running the
+training commands above. Keep the output and checkpoint files private.
+
+```bash
+python /workspace/ledger/evaluate_inkling_validation_nll.py \
+  --recipe /workspace/ledger/configs/inkling/rtx6000-smoke.yaml \
+  --validation /workspace/data/validation.json \
+  --checkpoints /workspace/inkling-resume \
+  --output /workspace/ledger/private/inkling-validation-scorecard.jsonl
+```
+
 Exact generated answers and false support require a separate comparison
 with the same prompts, decoding settings, and scorer. The available
 private broker set contains 186 cases and differs from the 29-case set
@@ -725,7 +740,20 @@ Provide the original single-GPU training recipe, the adapter's `model/`
 directory, a private frozen holdout, and a new output path. It uses greedy
 decoding with the same 64-token limit for both variants. It writes a batch
 only after both variants finish, so an interrupted run retains paired
-replies. A GPU smoke test exposed repeated FlexAttention compilation as
+replies. Summarize the completed pairs with:
+
+```bash
+python summarize_inkling_generation.py private/inkling-broker-generation.jsonl
+```
+
+The headline paired accuracy counts cases where both models return the
+exact answer, divided by the number of matched **supported** cases.
+The summary gives per-model exact accuracy, status recall, and truncation
+separately for supported and unsupported cases. False-support rate uses
+matched unsupported cases as its denominator. Unpaired replies are
+counted separately.
+
+A GPU smoke test exposed repeated FlexAttention compilation as
 the decode sequence grew. The fixed-shape retry generated the stock
 half of the first batch before the runtime limit. No paired scores were
 produced.

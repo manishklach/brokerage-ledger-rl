@@ -25,7 +25,7 @@ I ran stock Inkling and each adapter on the same 100 synthetic validation cases 
 | Step 8 | 0.1801 |
 | Step 12 | 0.1638 |
 
-The step-12 checkpoint assigned the most probability to the expected answer tokens. The scoring pass provides the correct preceding tokens, so it measures how the model scores a known answer. An open-ended run has to generate the status and citations itself, where an early mistake can change everything that follows.
+I selected step 12 by teacher-forced NLL alone. A drop after SFT is expected. The [scoring script](evaluate_inkling_validation_nll.py) records the loss for each checkpoint. The scoring pass provides the correct preceding tokens, so it measures how the model scores a known answer. An open-ended run has to generate the status and citations itself, where an early mistake can change everything that follows.
 
 I tried to run that matched generation test on the private 186-case broker set. The first decoder changed its tensor shape at every token, causing repeated FlexAttention compilation. A fixed-shape retry generated the stock half of the first 12-case batch before the budget cap. It produced no paired scores. For a fair comparison, I need both variants to answer the same cases, then count exact status and citation matches, recall by status, false claims of support, and truncation. The 186-case set is also distinct from the 29-case set mentioned in an external review.
 
