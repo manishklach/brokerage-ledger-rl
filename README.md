@@ -690,7 +690,10 @@ Provide the original single-GPU training recipe, the adapter's `model/`
 directory, a private frozen holdout, and a new output path. It uses greedy
 decoding with the same 64-token limit for both variants. It writes a batch
 only after both variants finish, so an interrupted run retains paired
-replies. The runner is prepared but has not completed a GPU smoke test.
+replies. A GPU smoke test exposed repeated FlexAttention compilation as
+the decode sequence grew. The fixed-shape retry generated the stock
+half of the first batch before the runtime limit. No paired scores were
+produced.
 
 
 ### H100 vLLM smoke test

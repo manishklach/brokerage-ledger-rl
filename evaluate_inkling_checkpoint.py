@@ -54,32 +54,48 @@ def main():
     b_params = [p for n, p in model.named_parameters() if ".lora_B." in n]
     assert b_params
 
+    batch_size, max_new_tokens = 12, 64
+    for case in cases:
+        prompt = tok.apply_chat_template(
+            [{"role": "user", "content": case["prompt"]}], tokenize=False
+        ) + "<|message_model|><|content_text|>"
+        case["tokens"] = tok.encode(prompt, add_special_tokens=False)
+    prompt_width = max(len(case["tokens"]) for case in cases)
+    decode_width = prompt_width + max_new_tokens
+
     @torch.no_grad()
     def generate(batch):
-        prompts = [tok.apply_chat_template([{"role":"user","content":c["prompt"]}], tokenize=False)
-                   + "<|message_model|><|content_text|>" for c in batch]
-        encoded = tok(prompts, padding=True, add_special_tokens=False, return_tensors="pt")
-        ids = encoded.input_ids.cuda()
-        valid = encoded.attention_mask.cuda().bool()
-        finished = torch.zeros(len(batch), dtype=torch.bool, device="cuda")
+        # Inkling's FlexAttention compiles for static dimensions. Reserve the
+        # entire output buffer so later tokens reuse the same compiled graph.
+        ids = torch.full((batch_size, decode_width), tok.pad_token_id, dtype=torch.long, device="cuda")
+        valid = torch.zeros_like(ids, dtype=torch.bool)
+        for row, case in enumerate(batch):
+            tokens = case["tokens"]
+            ids[row, prompt_width - len(tokens):prompt_width] = torch.tensor(tokens, device="cuda")
+            valid[row, prompt_width - len(tokens):prompt_width] = True
+        # Keep a valid prompt in padded batch slots to avoid wholly masked rows.
+        ids[len(batch):] = ids[0]
+        valid[len(batch):] = valid[0]
+        finished = torch.arange(batch_size, device="cuda") >= len(batch)
         tokens = []
-        for _ in range(64):
+        position = torch.empty(1, dtype=torch.long, device="cuda")
+        for index in range(prompt_width, decode_width):
             positions = (valid.long().cumsum(-1) - 1).clamp_min(0)
-            logits = model(input_ids=ids, padding_mask=~valid, position_ids=positions, logits_to_keep=1)
-            next_id = logits[:, -1].argmax(-1)
-            next_id = torch.where(finished, stop_ids[0], next_id)
-            tokens.append(next_id)
-            ids = torch.cat((ids, next_id[:, None]), dim=-1)
-            valid = torch.cat((valid, (~finished)[:, None]), dim=-1)
+            position.fill_(index - 1)
+            logits = model(input_ids=ids, padding_mask=~valid, position_ids=positions, logits_to_keep=position)
+            next_id = torch.where(finished, stop_ids[0], logits[:, -1].argmax(-1))
+            tokens.append(next_id[:len(batch)])
+            ids[:, index] = next_id
+            valid[:, index] = ~finished
             finished |= torch.isin(next_id, stop_ids)
             if finished.all().item():
                 break
         replies = tok.batch_decode(torch.stack(tokens, dim=1).cpu(), skip_special_tokens=True)
-        return zip(replies, finished.tolist(), strict=True)
+        return zip(replies, finished[:len(batch)].tolist(), strict=True)
 
     with args.output.open("x", encoding="utf-8") as stream, torch.no_grad():
-        for offset in range(0, len(cases), 12):
-            batch = cases[offset:offset + 12]
+        for offset in range(0, len(cases), batch_size):
+            batch = cases[offset:offset + batch_size]
             paired = []
             for variant in ("stock", "step12"):
                 if variant == "stock":
