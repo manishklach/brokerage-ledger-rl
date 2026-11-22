@@ -36,6 +36,13 @@ class PortfolioReportTest(unittest.TestCase):
                      "is_option": False, "closed": "2025-02-13", "transaction_closed": "2025-02-13"}
         report = build_portfolio_report(transactions, [lot, other_lot], [position], closed, closed, ["XYZ"])
 
+        self.assertEqual(report["report_year"], 2025)
+        self.assertEqual(report["coverage"]["transaction_posted_from"], "2025-01-02")
+        self.assertEqual(report["coverage"]["realized_closes_through"], "2025-02-13")
+        self.assertEqual(report["transactions"][0]["source_line"], 2)
+        self.assertEqual(report["realized_lots"][1]["instrument"], "OTHER")
+        self.assertEqual(report["holdings_snapshot"]["positions"], [position])
+
         monthly = report["monthly"]
         self.assertEqual(monthly["realized"]["realized"], Decimal(100))
         groups = monthly["monthly_transaction_review"]["option_close_comparison"]["groups"]

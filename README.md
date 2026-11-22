@@ -7,7 +7,7 @@ The workflow is read-only.
 
 The project is licensed under [Apache 2.0](LICENSE).
 
-## What’s available in v0.2.0
+## What’s available in v0.3.0
 
 - Run the ledger locally to reconcile option lots, check a holdings snapshot,
   and generate a portfolio report with source row references. The
@@ -15,16 +15,19 @@ The project is licensed under [Apache 2.0](LICENSE).
 - Load the report into the private query workspace. Ten examples work
   immediately with the sample portfolio or your own report. Results display
   readable values, missing inputs, and expandable evidence.
-- Free-form questions need an Inkling 2 Mini endpoint. The model selects
-  one of the supported report queries. The report stays in the browser.
-  The managed connection is pending live endpoint setup.
+- Hosted Inkling 2 Mini handles questions about multiple tickers and metrics
+  in one request. The browser calculates realized P&L, snapshot unrealized
+  P&L, and recorded dividends from the private report.
+- The hosted planner passed a cold-start test on an on-demand NVIDIA L4
+  using a synthetic report. Cold starts can take several minutes, and
+  earlier attempts returned timeouts or HTTP 502.
 - Stock Inkling scored 45/48 on the expanded synthetic evidence holdout.
   All three truncated cases passed when retried at a higher token cap.
   A pinned vLLM configuration also passed one synthetic query on H100.
 
 [Get started with a portfolio report](#generate-a-report-for-the-query-ui) ·
 [Read the project write-up](BLOG.md) ·
-[Download v0.2.0](https://github.com/manishklach/brokerage-ledger-rl/releases/tag/v0.2.0)
+[Download v0.3.0](https://github.com/manishklach/brokerage-ledger-rl/releases/tag/v0.3.0)
 
 ## Current model direction
 
@@ -419,11 +422,29 @@ accuracy on new question formats.
    `private/portfolio-report.json`. Pick one of the ten examples and select
    **Run query**. The workspace displays the computed answer as readable
    text with expandable source evidence.
-4. For free-form questions, select **Inkling connection** and enter the HTTPS
-   base URL ending in `/v1` for a running OpenAI-compatible Inkling 2 Mini
-   server. Use an API key if the server requires one. The server must allow
-   requests from the site's origin. Inkling routes the question to a
-   supported report query while the JSON stays in the browser.
+4. In the private hosted workspace, type a free-form question and select
+   **Run query**. For example, ask “What were the unrealized losses and
+   recorded dividends for AAPL and MSFT in 2026? Show each ticker and the
+   combined totals.” Use tickers and a year covered by your report.
+   **Inkling connection** is available for a separate OpenAI-compatible
+   Inkling server ending in `/v1` that allows requests from the Site origin.
+
+The Site sends the question text to Inkling. For ticker-level P&L and
+dividend queries, it validates the returned tickers, metrics, year, and
+answer placeholder before calculating the figures in the browser.
+Unrealized P&L is dated to the holdings snapshot. Dividend totals cover
+the transaction dates shown and include recorded reinvested dividends.
+The report now includes transaction rows, annual realized lots, and
+holdings. Keep the JSON and source exports private.
+
+The managed deployment uses stock Inkling 2 Mini in 4-bit GGUF format,
+served by llama.cpp on Runpod Serverless. It has zero minimum workers,
+allows one L4 on demand, and has a 15-second idle timeout. The Site source
+is versioned separately in Sites. Its deployed planner passed one hosted
+test with a synthetic two-ticker report, returning the expected $150
+unrealized loss and $40 in dividends. This verifies the compound query path
+for that case. It does not establish cold-start reliability or accuracy
+across arbitrary portfolio questions.
 
 The JSON comes from the CSVs and can be regenerated whenever they change.
 Generating the report requires no model training. The hosted workspace is

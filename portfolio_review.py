@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 from collections import Counter, defaultdict
+from dataclasses import asdict
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -230,6 +231,8 @@ def build_portfolio_report(transactions, realized_lots, positions, period, as_of
     """Analyze normalized records without reading broker exports."""
     year = period.year
     month_label = period.strftime("%Y-%m")
+    transactions = list(transactions)
+    positions = list(positions)
     annual = review_lots(transactions, realized_lots, year)
     lots = annual["broker_lots"]
     month_lots = [r for r in lots if r["closed"].startswith(month_label + "-")]
@@ -244,7 +247,20 @@ def build_portfolio_report(transactions, realized_lots, positions, period, as_of
     }
     holdings = holdings_review(positions, as_of, targets)
     answers = answer_questions(month, lots, holdings, index, targets)
+    year_transactions = [row for row in transactions if row.posted_date.year == year]
+    posted = [row.posted_date.isoformat() for row in year_transactions]
+    closed = [row["closed"] for row in lots]
     return {
+        "report_year": year,
+        "coverage": {
+            "transaction_posted_from": min(posted, default=None),
+            "transaction_posted_through": max(posted, default=None),
+            "realized_closes_from": min(closed, default=None),
+            "realized_closes_through": max(closed, default=None),
+        },
+        "transactions": [asdict(row) for row in year_transactions],
+        "realized_lots": lots,
+        "holdings_snapshot": {"as_of": as_of.isoformat(), "positions": positions},
         "monthly": month, "holdings": holdings, "answers": answers,
         "answer_status_counts": Counter(a["status"] for a in answers.values()),
     }

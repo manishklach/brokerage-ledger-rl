@@ -27,8 +27,8 @@ flowchart TB
 
     subgraph QUERY["Query workflow"]
         direction TB
-        QUESTION["Type a portfolio question"] --> ROUTE["Inkling routes the question"]
-        ROUTE --> LOOKUP["Browser looks up the answer"]
+        QUESTION["Type a portfolio question"] --> ROUTE["Inkling plans tickers, metrics, and year"]
+        ROUTE --> LOOKUP["Browser checks scope and calculates figures"]
         REPORT --> LOOKUP
         LOOKUP --> ANSWER["Answer, source rows, and missing evidence"]
     end
@@ -41,7 +41,7 @@ flowchart TB
     class QUESTION,ROUTE,LOOKUP,ANSWER query;
 ```
 
-The report stays in the browser. Inkling receives the question and selects a supported query. The dashed path shows where fine-tuning would fit if testing reveals a gap worth addressing.
+The report stays in the browser. Inkling receives the question and returns a plan for the browser to execute. The dashed path shows where fine-tuning would fit if testing reveals a gap worth addressing.
 
 ## I built the ledger first
 
@@ -69,7 +69,11 @@ At this point, the Inkling milestone is a working inference baseline and a datas
 
 ## What I want to build from here
 
-I built a query workspace that loads a locally generated portfolio report. Inkling routes a question to a supported ledger query, and the workspace shows the result and its evidence. The report stays in the browser. When I import newer transactions, I regenerate the report, which lets me update the numbers without retraining the model.
+I built a query workspace that loads a locally generated portfolio report. An early version asked Inkling to pick a single query category. That broke on a natural question about losses and dividends for two tickers, even though the report had the holdings and dividend records.
+
+The planner now extracts the tickers, metrics, and year in one request and writes a short sentence with a results placeholder. The browser validates the plan, calculates the figures, and inserts the answer locally. When I import newer transactions, I regenerate the report to update the numbers without retraining the model.
+
+I tested the hosted path on a Runpod L4 with stock Inkling 2 Mini served by llama.cpp. A synthetic report let me verify that the live Site returned the right figures for both tickers and both metrics. Earlier cold starts timed out or returned gateway errors, so I pinned the endpoint to the data center where the compound test passed. That test measures the application workflow. The evidence holdout above measures a different skill: how well the model interprets and cites supplied evidence.
 
 I want to take this further for people who trade options frequently. A useful system could trace a multi-leg position from entry through partial exits, explain where realized P&L came from, and show which expirations or assignments might create liquidity pressure. For margin, I’d want timestamped broker figures and verified contract deliverables before making a claim about buying power. For taxes, I want to show broker-reported gains and adjustments alongside the supporting lots, including where the available records leave a gap. This prototype works from periodic exports. A live view would need current positions, market data, and broker margin inputs.
 
