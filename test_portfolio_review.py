@@ -32,7 +32,9 @@ class PortfolioReportTest(unittest.TestCase):
             "unrealized": Decimal(20), "is_option": False,
         }
 
-        report = build_portfolio_report(transactions, [lot], [position], closed, closed, ["XYZ"])
+        other_lot = {**lot, "broker_source_line": 6, "underlying": "OTHER", "instrument": "OTHER",
+                     "is_option": False, "closed": "2025-02-13", "transaction_closed": "2025-02-13"}
+        report = build_portfolio_report(transactions, [lot, other_lot], [position], closed, closed, ["XYZ"])
 
         monthly = report["monthly"]
         self.assertEqual(monthly["realized"]["realized"], Decimal(100))
@@ -41,4 +43,8 @@ class PortfolioReportTest(unittest.TestCase):
         self.assertEqual(groups[0]["broker_lines"], [5])
         self.assertEqual(groups[0]["transaction_lines"], [3])
         self.assertEqual(report["holdings"]["ranked_marks"][0]["source_lines"], [7])
+        tax = report["answers"][19]["data"]
+        self.assertEqual(tax["annual_total"]["realized"], Decimal(200))
+        self.assertEqual(tax["annual_total"]["broker_source_lines"], [5, 6])
+        self.assertEqual(set(tax["by_underlying"]), {"XYZ"})
         self.assertNotIn("close_evidence", lot)
