@@ -7,7 +7,7 @@ The workflow is read-only.
 
 The project is licensed under [Apache 2.0](LICENSE).
 
-## What’s available in v0.3.0
+## What’s available in v0.4.0
 
 - Run the ledger locally to reconcile option lots, check a holdings snapshot,
   and generate a portfolio report with source row references. The
@@ -21,13 +21,16 @@ The project is licensed under [Apache 2.0](LICENSE).
 - The hosted planner passed a cold-start test on an on-demand NVIDIA L4
   using a synthetic report. Cold starts can take several minutes, and
   earlier attempts returned timeouts or HTTP 502.
+- A single 96 GB RTX PRO 6000 ran the Inkling lot-evidence LoRA pilot and
+  resumed from its first checkpoint. Step 12 ranked first on held-out
+  answer-token loss. The paired generation benchmark is still incomplete.
 - Stock Inkling scored 45/48 on the expanded synthetic evidence holdout.
   All three truncated cases passed when retried at a higher token cap.
   A pinned vLLM configuration also passed one synthetic query on H100.
 
 [Get started with a portfolio report](#generate-a-report-for-the-query-ui) ·
-[Read the project write-up](BLOG.md) ·
-[Download v0.3.0](https://github.com/manishklach/brokerage-ledger-rl/releases/tag/v0.3.0)
+[Read the project write-up](BLOG.md) · [Read Part 2](BLOG_PART_2.md) ·
+[Download v0.4.0](https://github.com/manishklach/brokerage-ledger-rl/releases/tag/v0.4.0)
 
 ## Current model direction
 
@@ -666,6 +669,38 @@ one example per step, and a 1,024-token sequence limit. The first smoke
 test and the resumed pilot cost an estimated $0.28 and $0.33 in GPU time.
 The earlier B200 attempt ended during container extraction.
 
+The recorded [smoke recipe](configs/inkling/rtx6000-smoke.yaml) and
+[resume recipe](configs/inkling/rtx6000-resume.yaml) use the same base
+model and resume from the first saved checkpoint. The original runner
+used the NVIDIA NeMo AutoModel 26.10 container pinned to
+`sha256:0e4279f2740b4de9c3884f5d434d1a1520057c825f8a28d1e66dd16515451e9c`,
+with the AutoModel source checkout at
+`46fa6a505910a1e3c9bf58930b89047a7b6d748c` on `PYTHONPATH`.
+The run recorded Transformers 5.18.0 and PyTorch
+`2.14.0a0+4fdf77b940.nv26.08` with CUDA 13.4.
+
+To reproduce the short training run on a compatible Linux GPU, make
+the project checkout available as `/workspace/ledger` and the pinned
+AutoModel checkout as `/workspace/automodel`. Run from the AutoModel
+checkout so the relative chat-template path resolves. Use fresh output
+directories if repeating an existing run.
+
+```bash
+export PYTHONPATH=/workspace/automodel
+export HF_HOME=/workspace/hf
+cd /workspace/automodel
+python /workspace/ledger/prepare_inkling_lot_sft.py --output /workspace/data
+automodel /workspace/ledger/configs/inkling/rtx6000-smoke.yaml --nproc-per-node 1
+automodel /workspace/ledger/configs/inkling/rtx6000-resume.yaml --nproc-per-node 1
+```
+
+The recipe dequantizes the released checkpoint into BF16 for training.
+It applies LoRA to the attention projections and keeps the expert
+weights frozen. The pilot reached about 51 GiB peak GPU memory in the
+recorded resumed-step logs. NeMo names checkpoints by zero-based
+step index, so `epoch_0_step_11` is the adapter after 12 optimizer steps.
+
+
 Stock Inkling and each adapter were evaluated in the same runtime against
 the same 100 synthetic validation examples, covering 2,252 answer
 tokens per variant. The adapter at step 12 had the lowest mean negative
@@ -694,6 +729,16 @@ replies. A GPU smoke test exposed repeated FlexAttention compilation as
 the decode sequence grew. The fixed-shape retry generated the stock
 half of the first batch before the runtime limit. No paired scores were
 produced.
+
+The pod was stopped after the run. Its persistent disk was tied to
+the original host, and Runpod could not allocate that GPU for recovery.
+The pod was restarted with CPUs and all four checkpoints were archived,
+including the optimizer state, recipes, and validation results. The
+local archive matched the SHA-256 digest computed on the pod. The pod
+and its 45 GB disk were then deleted. The archive is kept in the
+ignored `private/` directory and is excluded from GitHub and release
+downloads. The hosted L4 Site serves the stock model.
+
 
 
 ### H100 vLLM smoke test

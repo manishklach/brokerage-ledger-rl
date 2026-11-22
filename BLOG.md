@@ -1,5 +1,7 @@
 # What it takes to post-train Inkling for a real options book
 
+[Part 2 covers the GPU training run, evaluation, and checkpoint recovery.](BLOG_PART_2.md)
+
 I wanted to learn how post-training works by building something I would actually use. My brokerage history gave me a problem I knew well. After a busy stretch of options trading, a single position can involve multiple fills, partial exits, and a roll into another expiration. Weeks later, I might want to know which opening lots a close used, how much gain I realized, or why the broker’s cost basis differs from what I reconstructed.
 
 I started with a simple question. Could I build a system that answers those questions in plain English and shows me the records behind each answer?
