@@ -542,9 +542,10 @@ on PATH.
 python evaluate_portfolio_server.py --base-url https://YOUR_SERVER/v1 --model thinkingmachines/Inkling-2-Mini --reasoning-effort low --max-tokens 512 --startup-timeout 1200 --output artifacts/inkling-2-mini/portfolio-route-low-effort.json
 ```
 
-### Inkling fine-tuning direction
+### Inkling routing training data
 
-Use Inkling 2 Mini as the base for the next portfolio-routing SFT run.
+The first Inkling adapter targets lot evidence. The separate routing exporter
+is available for experiments on portfolio query selection.
 Keep stock Inkling as the primary baseline and retain Qwen scores for
 historical comparison. Use the same decoding settings for stock and
 fine-tuned Inkling and report exact routes, missed routes, and cutoffs.
@@ -642,6 +643,47 @@ reasoning setting. The retry covered only the truncated cases.
 Estimated GPU charges were $1.20 for the first startup attempt, $1.95 for the
 completed baseline, and $0.60 for the targeted retry. The temporary Pods
 were removed after use. Fine-tuning was deferred.
+
+### Inkling lot-evidence LoRA on one RTX PRO 6000
+
+Generate the targeted synthetic training split and independent validation
+split with:
+
+```powershell
+python prepare_inkling_lot_sft.py --output private/inkling-targeted-lot-sft
+```
+
+The generator produces 400 training and 100 validation examples. It
+covers single-row partial fills, missing opening dates, quantity
+shortfalls, exact fills, and ambiguous allocations. Validation uses a
+separate seed and year. The broker holdout is excluded from training
+and checkpoint selection.
+
+A single 96 GB RTX PRO 6000 Blackwell completed one text-only LoRA step
+and then reloaded that checkpoint to finish a 12-step pilot. The run used
+NeMo AutoModel at `46fa6a5`, BF16 parameters, rank-8 attention adapters,
+one example per step, and a 1,024-token sequence limit. The first smoke
+test and the resumed pilot cost an estimated $0.28 and $0.33 in GPU time.
+The earlier B200 attempt ended during container extraction.
+
+Stock Inkling and each adapter were evaluated in the same runtime against
+the same 100 synthetic validation examples, covering 2,252 answer
+tokens per variant. The adapter at step 12 had the lowest mean negative
+log likelihood per answer token.
+
+| Model | Mean validation NLL per answer token |
+| --- | ---: |
+| Stock Inkling | 1.1473 |
+| Step 4 | 0.2941 |
+| Step 8 | 0.1801 |
+| Step 12 | 0.1638 |
+
+This score measures probability assigned to the expected answer tokens.
+Exact generated answers and false support require a separate comparison
+with the same prompts, decoding settings, and scorer. The available
+private broker set contains 186 cases and differs from the 29-case set
+described in external feedback. Neither comparison has produced results
+yet. Keep the original reports and holdouts private.
 
 ### H100 vLLM smoke test
 

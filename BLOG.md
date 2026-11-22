@@ -20,7 +20,7 @@ flowchart TB
         EXAMPLES --> HOLDOUT["Held-out examples"]
         BASE["Stock Inkling 2 Mini"] --> SCORE["Score status and exact citations"]
         HOLDOUT --> SCORE
-        TRAIN -.-> SFT["Supervised fine-tuning<br/>Prepared, pending a baseline gap"]
+        TRAIN -.-> SFT["Supervised fine-tuning<br/>12-step LoRA pilot"]
         BASE -.-> SFT
         SFT -.-> SCORE
     end
@@ -41,7 +41,7 @@ flowchart TB
     class QUESTION,ROUTE,LOOKUP,ANSWER query;
 ```
 
-The report stays in the browser. Inkling receives the question and returns a plan for the browser to execute. The dashed path shows where fine-tuning would fit if testing reveals a gap worth addressing.
+The report stays in the browser. Inkling receives the question and returns a plan for the browser to execute. The dashed path shows the separate fine-tuning workflow.
 
 ## I built the ledger first
 
@@ -65,7 +65,11 @@ I ran **stock Inkling 2 Mini** on a Runpod B200. It got **42 out of 44** on the 
 
 That gap changed what I’d try next. Most strict-score misses came from output formatting, which is something I can address with a structured response or a narrow parser change before renting GPUs to tune weights. The benchmark also gave Inkling evidence the ledger had already classified, so it measures how well the model interprets and cites that evidence. The next test needs messier inputs, including partial quantities across months and competing lot allocations.
 
-At this point, the Inkling milestone is a working inference baseline and a dataset prepared for supervised fine-tuning. The adapter experiments came earlier on the other model. I haven’t trained an Inkling adapter yet. I’ll compare one against stock Inkling under the same decoding settings if the next holdout exposes a recurring error worth training on.
+I then built a targeted set of 400 synthetic training examples and 100 separate validation examples. I focused on three cases that matter when checking an options close: one opening row can cover a partial allocation, a required date can be missing, and several opening rows can add up to less than the requested quantity. I included exact fills and ambiguous allocations so the model could also practice when to support a claim and when to withhold it.
+
+The first B200 rental spent its time unpacking the training image. A cheaper 96 GB RTX PRO 6000 Blackwell completed a LoRA step, reloaded the adapter, and finished a 12-step pilot. I saved checkpoints after steps 4, 8, and 12. On the same 100 synthetic validation examples, mean loss per expected answer token fell from 1.1473 for stock Inkling to 0.1638 at step 12.
+
+That gave me a checkpoint to test next. I still need to let stock Inkling and the adapter generate their own replies on untouched brokerage cases. I’ll count exact status and citation matches and check how often either model claims support when the opening evidence falls short.
 
 ## What I want to build from here
 
