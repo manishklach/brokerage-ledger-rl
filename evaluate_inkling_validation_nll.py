@@ -12,6 +12,7 @@ from nemo_automodel.components.datasets.utils import default_collater
 from nemo_automodel.components.datasets.llm.chat_dataset import ChatDataset
 from nemo_automodel.recipes.llm.train_ft import TrainFinetuneRecipeForNextTokenPrediction
 
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipe", type=Path, required=True)
@@ -74,4 +75,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
