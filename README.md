@@ -5,6 +5,8 @@ ledger reconciles broker-reported lots, calculates portfolio figures, and cites
 source rows. The language model routes questions and identifies missing evidence.
 Schwab is the first supported CSV integration. The workflow is read-only.
 
+The project is licensed under [Apache 2.0](LICENSE).
+
 ## Current model direction
 
 **Inkling 2 Mini is the model for the next evaluation.** Run stock Inkling on

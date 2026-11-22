@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "Local brokerage ledger and portfolio reconciliation"
 requires-python = ">=3.11"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 
 [project.scripts]
 brokerage-ledger = "ledger:main"
