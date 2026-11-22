@@ -685,6 +685,14 @@ private broker set contains 186 cases and differs from the 29-case set
 described in external feedback. Neither comparison has produced results
 yet. Keep the original reports and holdouts private.
 
+`evaluate_inkling_checkpoint.py` is the native NeMo comparison runner.
+Provide the original single-GPU training recipe, the adapter's `model/`
+directory, a private frozen holdout, and a new output path. It uses greedy
+decoding with the same 64-token limit for both variants. It writes a batch
+only after both variants finish, so an interrupted run retains paired
+replies. The runner is prepared but has not completed a GPU smoke test.
+
+
 ### H100 vLLM smoke test
 
 A single Runpod H100 SXM served stock Inkling 2 Mini and returned the correct
