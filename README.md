@@ -3,15 +3,15 @@
 A local-first toolkit for brokerage portfolio and options analysis. A deterministic
 ledger reconciles broker-reported lots, calculates portfolio figures, and cites
 source rows. The language model routes questions and identifies missing evidence.
-Schwab is the first supported CSV integration. The workflow is read-only.
+The workflow is read-only.
 
 The project is licensed under [Apache 2.0](LICENSE).
 
 ## What’s available in v0.2.0
 
 - Run the ledger locally to reconcile option lots, check a holdings snapshot,
-  and generate a portfolio report with source row references. Schwab is the
-  first CSV integration, and the analysis API accepts normalized broker records.
+  and generate a portfolio report with source row references. The
+  analysis API accepts normalized broker records.
 - Load the report into the private query workspace. Ten examples work
   immediately with the sample portfolio or your own report. Results display
   readable values, missing inputs, and expandable evidence.
@@ -65,45 +65,6 @@ version of Applied Compute's workflow of adapting a base model and measuring
 it on a domain task. AC2 also manages enterprise serving and ongoing model
 improvement. [Applied Compute's AC2 overview](https://www.appliedcompute.com/platform/introducing-ac2)
 
-## Broker integrations
-
-The portfolio engine accepts normalized transactions, realized lots, and positions
-through `portfolio_review.build_portfolio_report`. An integration translates a
-broker's export to those records and preserves source row numbers. The Schwab
-readers are the working example. The existing CSV command-line tools currently
-load Schwab formats. Other brokers can use the Python API by supplying their own
-readers.
-
-| Input | Normalized contract | Schwab example |
-| --- | --- | --- |
-| Transactions | A nonempty list of `ledger.Transaction` records with Python dates, canonical actions, source lines, and `Decimal` values for numeric fields | `ledger.read_export` |
-| Realized lots | Mappings with `broker_source_line`, `instrument`, `underlying`, `is_option`, positive `quantity`, ISO dates `opened`, `closed`, `transaction_closed`, `term`, `wash_sale_flag`, and the `portfolio_review.AMOUNTS` decimal fields | `period_review.read_schwab_realized` |
-| Positions | Mappings with `source_line`, `symbol`, `underlying`, `kind`, `is_option`, and nullable decimal fields `quantity`, `market_value`, `unrealized` | `portfolio_review.read_holdings` |
-
-Use `ROOT YYYY-MM-DD STRIKE C/P` consistently for option instruments and
-`ledger.OPTION_ACTIONS` for option opens and closes. Map asset kinds to the
-values used in `holdings_review` and keep each snapshot's date with its source.
-Validate the new broker's date, quantity, cash, and lot conventions against its
-own reports. Existing broker-derived evaluations are scoped to Schwab.
-
-### Schwab export coverage
-
-We have tested Schwab transaction history, realized gain/loss detail, and
-position snapshot CSV layouts. New data in the same layouts can be imported.
-Other Schwab layouts may need parser work for alternate headers, title or
-subtotal rows, missing fields, or account identifiers. Test each new format
-with redacted or synthetic fixtures and reconcile row counts and signed
-amounts before relying on it.
-
-Import new trades as ledger data. Once an export maps to the same ledger
-fields, its layout does not require retraining. Consider more SFT when a
-repeatable interpretation error survives fixes to the parser, ledger, or
-prompt. One candidate is confusing a close month with an option expiration.
-Turn the error into labeled question-to-filter examples and compare stock,
-the existing adapter, and the new adapter on a fresh holdout. Keep contracts
-or time periods separate between training and evaluation. Make a separate
-data-handling decision before using any real brokerage rows for cloud training.
-
 ## What the project does
 
 1. Normalize one account's transaction export, keeping source row
@@ -118,18 +79,6 @@ data-handling decision before using any real brokerage rows for cloud training.
    source row IDs and, depending on the task, cash or evidence status.
 5. Evaluate checkpoints on the same held-out inputs. Synthetic evaluation can
    run on a GPU Pod. Broker-derived prompts and labels stay local.
-
-## Schwab example inputs
-
-| Schwab export | Fields used | Purpose |
-| --- | --- | --- |
-| Transaction history | Date, Action, Symbol, Description, Quantity, Price, Fees & Comm, Amount | Source transactions and reported cash |
-| Realized Gain/Loss detail | Symbol, Closed Date, Opened Date, Quantity, Gain/Loss, wash-sale flag | Independent broker lot and P&L comparison |
-| Positions snapshot | Symbol, signed quantity, snapshot date supplied via CLI | Open options quantity comparison |
-
-Use one continuous transaction export per account and align the scope and
-dates of the other exports. If a newer export contains all rows in an earlier
-one, use the newer file on its own.
 
 ## Run the local workflow
 
@@ -671,3 +620,56 @@ exec vllm serve thinkingmachines/Inkling-2-Mini \
   --host 0.0.0.0 --port 8000 --reasoning-parser inkling \
   --max-model-len 4096 --max-num-seqs 2 --enforce-eager
 ```
+
+## Broker integrations
+
+Schwab is the first supported CSV integration.
+
+The portfolio engine accepts normalized transactions, realized lots, and positions
+through `portfolio_review.build_portfolio_report`. An integration translates a
+broker's export to those records and preserves source row numbers. The Schwab
+readers are the working example. The existing CSV command-line tools currently
+load Schwab formats. Other brokers can use the Python API by supplying their own
+readers.
+
+| Input | Normalized contract | Schwab example |
+| --- | --- | --- |
+| Transactions | A nonempty list of `ledger.Transaction` records with Python dates, canonical actions, source lines, and `Decimal` values for numeric fields | `ledger.read_export` |
+| Realized lots | Mappings with `broker_source_line`, `instrument`, `underlying`, `is_option`, positive `quantity`, ISO dates `opened`, `closed`, `transaction_closed`, `term`, `wash_sale_flag`, and the `portfolio_review.AMOUNTS` decimal fields | `period_review.read_schwab_realized` |
+| Positions | Mappings with `source_line`, `symbol`, `underlying`, `kind`, `is_option`, and nullable decimal fields `quantity`, `market_value`, `unrealized` | `portfolio_review.read_holdings` |
+
+Use `ROOT YYYY-MM-DD STRIKE C/P` consistently for option instruments and
+`ledger.OPTION_ACTIONS` for option opens and closes. Map asset kinds to the
+values used in `holdings_review` and keep each snapshot's date with its source.
+Validate the new broker's date, quantity, cash, and lot conventions against its
+own reports. Existing broker-derived evaluations are scoped to Schwab.
+
+### Schwab export coverage
+
+We have tested Schwab transaction history, realized gain/loss detail, and
+position snapshot CSV layouts. New data in the same layouts can be imported.
+Other Schwab layouts may need parser work for alternate headers, title or
+subtotal rows, missing fields, or account identifiers. Test each new format
+with redacted or synthetic fixtures and reconcile row counts and signed
+amounts before relying on it.
+
+Import new trades as ledger data. Once an export maps to the same ledger
+fields, its layout does not require retraining. Consider more SFT when a
+repeatable interpretation error survives fixes to the parser, ledger, or
+prompt. One candidate is confusing a close month with an option expiration.
+Turn the error into labeled question-to-filter examples and compare stock,
+the existing adapter, and the new adapter on a fresh holdout. Keep contracts
+or time periods separate between training and evaluation. Make a separate
+data-handling decision before using any real brokerage rows for cloud training.
+
+### Schwab example inputs
+
+| Schwab export | Fields used | Purpose |
+| --- | --- | --- |
+| Transaction history | Date, Action, Symbol, Description, Quantity, Price, Fees & Comm, Amount | Source transactions and reported cash |
+| Realized Gain/Loss detail | Symbol, Closed Date, Opened Date, Quantity, Gain/Loss, wash-sale flag | Independent broker lot and P&L comparison |
+| Positions snapshot | Symbol, signed quantity, snapshot date supplied via CLI | Open options quantity comparison |
+
+Use one continuous transaction export per account and align the scope and
+dates of the other exports. If a newer export contains all rows in an earlier
+one, use the newer file on its own.
