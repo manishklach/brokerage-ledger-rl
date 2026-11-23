@@ -251,3 +251,22 @@ data-handling decision before using any real brokerage rows for cloud training.
 Use one continuous transaction export per account and align the scope and
 dates of the other exports. If a newer export contains all rows in an earlier
 one, use the newer file on its own.
+
+## Private five-year regression
+
+Use a local directory with the complete combined `transactions.csv` and
+`realized.csv` exports and an approved `golden-hash.txt`. Set
+`LEDGER_PRIVATE_DIR` to that directory and `LEDGER_PRIVATE_YEARS` to five
+consecutive years separated by commas. Install the project before running
+`python -m unittest test_private_golden -v`. Public CI skips the test when
+the exports are absent. Use the actual ledger exports. Frozen model
+holdouts are separate evaluation inputs.
+
+The test hashes a sorted-key JSON list of five effective-date
+`ledger-review` reports in ascending year order. Each report includes the
+package version and input digests. To establish or renew a baseline,
+generate and review those reports locally before hashing the list with
+`hashlib.sha256(json.dumps(reports, sort_keys=True).encode()).hexdigest()`.
+Store the approved hex digest in `golden-hash.txt` alongside the private
+files. Keep the exports, the reports, and the resulting hash out of Git.
+Identical exported rows remain separate because they can be separate fills.

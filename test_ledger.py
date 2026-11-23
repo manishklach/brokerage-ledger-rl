@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import date
+from decimal import Decimal
 
 from ledger import audit, read_export
 from rewards import score_spread
@@ -60,3 +62,42 @@ class LedgerTests(unittest.TestCase):
         for answer, expected in cases.items():
             with self.subTest(answer=answer):
                 self.assertEqual(score_spread(answer, [2, 3], "148.70"), expected)
+
+    def test_parenthesized_values_as_of_date_and_identical_rows(self):
+        header = CSV.splitlines()[0]
+        row = '01/02/2026 as of 12/31/2025,Expired,DEMO 01/16/2026 100 C,,(2),,,(200)'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.csv"
+            path.write_text("\n".join((header, row, row)) + "\n", encoding="utf-8")
+            diagnostics = []
+            rows = read_export(path, diagnostics=diagnostics)
+        self.assertEqual(diagnostics, [])
+        self.assertEqual([r.source_line for r in rows], [2, 3])
+        for parsed in rows:
+            self.assertEqual(parsed.quantity, Decimal(-2))
+            self.assertEqual(parsed.amount, Decimal(-200))
+            self.assertEqual(parsed.posted_date, date(2026, 1, 2))
+            self.assertEqual(parsed.effective_date, date(2025, 12, 31))
+
+    def test_mutated_records_are_rejected_and_later_rows_survive(self):
+        header, valid, *_ = CSV.splitlines()
+        for bad in (valid.replace("10/03/2026", "not-a-date"),
+                    valid.replace(",1,2.50", ",bad,2.50"),
+                    valid + ",extra"):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "fixture.csv"
+                path.write_text("\n".join((header, valid, bad, valid)) + "\n", encoding="utf-8")
+                diagnostics = []
+                self.assertEqual([r.source_line for r in read_export(path, diagnostics=diagnostics)], [2, 4])
+                issue, = diagnostics
+                self.assertEqual((issue["file"], issue["line"]), (path.name, 3))
+                self.assertTrue(issue["reason"])
+
+    def test_missing_or_duplicate_transaction_headers_are_fatal(self):
+        header = CSV.splitlines()[0]
+        for bad in (header.replace(",Amount", ""), header + ",Amount"):
+            with self.subTest(header=bad), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "fixture.csv"
+                path.write_text(bad + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Missing or duplicate"):
+                    read_export(path, diagnostics=[])

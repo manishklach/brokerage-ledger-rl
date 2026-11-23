@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ledger import HEADERS, read_export
 from period_review import review
-from reconcile import holdings_comparison, realized_comparison
+from reconcile import export_rows, holdings_comparison, realized_comparison
 
 
 class ReconciliationTests(unittest.TestCase):
@@ -73,3 +73,10 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual([issue["reason"] for issue in issues], ["unsupported_action", "missing_quantity"])
         self.assertEqual(result["contracts_compared"], 1)
         self.assertEqual(result["quantity_ties"], 1)
+
+    def test_missing_or_duplicate_export_headers_are_fatal(self):
+        for header in (["Symbol"], ["Symbol", "Quantity", "Quantity"]):
+            with self.subTest(header=header):
+                path = self.csv("bad-header.csv", [header])
+                with self.assertRaisesRegex(ValueError, "Missing required export columns"):
+                    list(export_rows(path, {"Symbol", "Quantity"}, diagnostics=[]))
